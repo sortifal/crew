@@ -17,7 +17,7 @@ function md(s) {
   return t;
 }
 
-const S = { config: null, tasks: new Map(), feeds: { team: [], head: [], dm: {} }, tab: 'head', unread: {}, selected: null, detail: null, live: '', headBusy: false };
+const S = { auth: null, authPhase: { phase: 'idle' }, config: null, tasks: new Map(), feeds: { team: [], head: [], dm: {} }, tab: 'head', unread: {}, selected: null, detail: null, live: '', headBusy: false };
 
 /* ───────── rendering ───────── */
 function renderHeader() {
@@ -26,6 +26,8 @@ function renderHeader() {
   p.textContent = S.headBusy ? 'Head is thinking…' : 'Head idle';
   p.className = 'pill' + (S.headBusy ? ' busy' : '');
   if (S.cost != null) p.title = `Opus spend this session store: $${S.cost.toFixed(2)}`;
+  const lb = $('#btnLogin');
+  if (S.auth) { lb.textContent = S.auth.loggedIn ? '🔑 Claude ✔' : '🔑 Log in to Claude'; lb.style.color = S.auth.loggedIn ? '' : 'var(--warn)'; lb.style.borderColor = S.auth.loggedIn ? '' : 'var(--warn)'; lb.title = S.auth.loggedIn ? `Signed in: ${S.auth.method}${S.auth.email ? ' · ' + S.auth.email : ''}` : 'The Head (Opus) needs a Claude login or API key'; }
   $('#stop').hidden = !(S.headBusy && S.tab === 'head');
   const b = $('#banner');
   b.hidden = !S.repoError; b.textContent = S.repoError ? `Project repo problem: ${S.repoError} — open Settings to fix.` : '';
@@ -181,6 +183,34 @@ $('#btnNew').onclick = () => {
   $('#ntGo').onclick = async () => { try { await api('POST', '/api/tasks', { title: $('#ntTitle').value, brief: $('#ntBrief').value, verify: $('#ntVerify').value, assignee: $('#ntWho').value || undefined }); modal.close(); } catch (e) { $('#ntMsg').textContent = '✖ ' + e.message; } };
 };
 
+/* ───────── Claude login ───────── */
+async function refreshAuth() { try { S.auth = await api('GET', '/api/auth/status'); } catch { /* ignore */ } renderHeader(); if (S.authOpen) renderAuthModal(); }
+function renderAuthModal() {
+  const p = S.authPhase, a = S.auth || {};
+  let h = '<h3>Claude login (for the Head / Opus)</h3>';
+  if (p.phase === 'starting') h += '<p>Preparing the login link…</p><div class="actions"><button class="ghost" id="auCancel">Cancel</button></div>';
+  else if (p.phase === 'url' || p.phase === 'verifying') {
+    h += `<p><b>1.</b> Open this link, sign in and authorise:</p><div class="box"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--accent)">Open Claude sign-in ↗</a>\n<span class="muted" style="word-break:break-all">${esc(p.url)}</span></div><div class="actions"><button class="ghost" id="auCopy">Copy link</button></div>
+    <p><b>2.</b> Claude then shows a code. Paste it here:</p><input class="full" id="auCode" placeholder="Paste the code" autocomplete="off" ${p.phase === 'verifying' ? 'disabled' : ''}><div class="actions"><button id="auSubmit" ${p.phase === 'verifying' ? 'disabled' : ''}>${p.phase === 'verifying' ? 'Verifying…' : 'Submit code'}</button><button class="ghost" id="auCancel">Cancel</button></div>`;
+  } else {
+    if (p.phase === 'done') h += '<p style="color:var(--ok)">✔ Logged in.</p>';
+    if (p.phase === 'failed') h += `<p style="color:var(--bad)">✖ ${esc(p.message || 'Login failed')}</p>`;
+    h += a.loggedIn ? `<p>Currently signed in: <b>${esc(a.method || 'yes')}</b>${a.email ? ' · ' + esc(a.email) : ''}</p>` : '<p>Not signed in. The Head cannot work until you log in (or set <code>ANTHROPIC_API_KEY</code>).</p>';
+    if (a.error) h += `<div class="box">${esc(a.error)}</div>`;
+    h += `<label><input type="radio" name="auKind" value="sub" checked> Claude subscription (Pro/Max)</label><br><label><input type="radio" name="auKind" value="console"> Anthropic Console (API billing)</label><div class="actions"><button id="auStart">${a.loggedIn ? 'Sign in again' : 'Log in'}</button>${a.loggedIn && !/environment/.test(a.method) ? '<button class="ghost" id="auLogout">Log out</button>' : ''}</div><p class="muted">The login is stored in the container's home volume and survives restarts.</p>`;
+  }
+  $('#modalBody').innerHTML = `<button class="close" onclick="document.getElementById('modal').close()">✕</button>` + h;
+  const on = (sel, fn) => { const b = $(sel); if (b) b.onclick = async () => { try { await fn(); } catch (e) { alert(e.message); } }; };
+  on('#auStart', () => api('POST', '/api/auth/login', { console: document.querySelector('input[name=auKind]:checked')?.value === 'console' }));
+  on('#auCancel', () => api('POST', '/api/auth/cancel'));
+  on('#auLogout', async () => { S.auth = await api('POST', '/api/auth/logout'); S.authPhase = { phase: 'idle' }; renderHeader(); renderAuthModal(); });
+  on('#auCopy', () => navigator.clipboard.writeText(p.url));
+  on('#auSubmit', () => api('POST', '/api/auth/code', { code: $('#auCode').value }));
+  const ci = $('#auCode'); if (ci && !ci.disabled) { ci.focus(); ci.onkeydown = (e) => { if (e.key === 'Enter') $('#auSubmit').click(); }; }
+}
+$('#btnLogin').onclick = async () => { S.authOpen = true; modal.showModal(); await refreshAuth(); renderAuthModal(); };
+modal.addEventListener('close', () => { S.authOpen = false; });
+
 /* ───────── input ───────── */
 $('#composer').onsubmit = async (e) => {
   e.preventDefault();
@@ -208,6 +238,7 @@ function onEvent(e) {
     case 'head_state': S.headBusy = e.busy; S.cost = e.costUsd; if (!e.busy) S.live = ''; renderHeader(); renderRoster(); if (S.tab === 'head') renderChat(); break;
     case 'head_cleared': S.feeds.head = []; renderChat(); break;
     case 'dm': { const n = e.feed.slice(3); const name = S.config.workers.find((w) => w.name.toLowerCase() === n)?.name || n; (S.feeds.dm[name] ||= []).push(e.entry); if (e.entry.role !== 'user') bump('dm:' + name); renderTabs(); if (S.tab === 'dm:' + name) renderChat(); break; }
+    case 'auth': S.authPhase = e; if (e.phase === 'done') { S.auth = e.status ? { ...e.status } : S.auth; setTimeout(() => { if (S.authOpen && S.authPhase.phase === 'done') modal.close(); }, 1200); refreshAuth(); } if (S.authOpen) renderAuthModal(); break;
     case 'config': S.config = e.config; S.repoError = e.repoError; renderAll(); break;
   }
 }
@@ -218,6 +249,7 @@ async function init() {
   st.tasks.forEach((t) => S.tasks.set(t.id, t));
   S.feeds.team = st.feed; S.feeds.head = st.headChat;
   renderAll(); $('#chat').scrollTop = 1e9;
+  refreshAuth();
   const es = new EventSource('/api/events');
   es.onmessage = (m) => onEvent(JSON.parse(m.data));
   es.onerror = () => {};

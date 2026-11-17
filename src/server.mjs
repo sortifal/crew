@@ -7,6 +7,7 @@ import * as G from './git.mjs';
 import * as T from './tasks.mjs';
 import { sendToHead, stopHead, resetHead, headState } from './head.mjs';
 import { dm, dmFeed } from './dm.mjs';
+import { authStatus, startLogin, submitCode, cancelLogin, logout, loginState } from './auth.mjs';
 import { getLessons, setLessons, scopes, validScope } from './lessons.mjs';
 
 loadConfig();
@@ -35,7 +36,7 @@ app.get('/api/events', (req, res) => {
 });
 
 /* head */
-app.post('/api/head', h(async (r) => { if (!r.body.text?.trim()) throw new Error('empty message'); if (repoError) throw new Error(repoError); sendToHead(r.body.text.trim()); }));
+app.post('/api/head', h(async (r) => { if (!r.body.text?.trim()) throw new Error('empty message'); if (repoError) throw new Error(repoError); if (!(await authStatus()).loggedIn) throw new Error('Not logged in to Claude – click “Log in to Claude” in the top bar.'); sendToHead(r.body.text.trim()); }));
 app.post('/api/head/stop', h(async () => stopHead()));
 app.post('/api/head/reset', h(async () => { resetHead(); clearFeed('head-chat'); bus.emit('event', { type: 'head_cleared' }); }));
 
@@ -67,6 +68,13 @@ app.post('/api/dm/:name', h(async (r) => { const t = String(r.body.text || '').t
 /* lessons */
 app.get('/api/lessons/:scope', h(async (r) => { if (!validScope(r.params.scope)) throw new Error('unknown scope'); return { scope: r.params.scope, text: getLessons(r.params.scope) }; }));
 app.put('/api/lessons/:scope', h(async (r) => { if (!validScope(r.params.scope)) throw new Error('unknown scope'); setLessons(r.params.scope, String(r.body.text ?? '')); }));
+
+/* Claude (head) login */
+app.get('/api/auth/status', h(async () => ({ ...(await authStatus()), login: loginState() })));
+app.post('/api/auth/login', h(async (r) => startLogin({ console: !!r.body.console })));
+app.post('/api/auth/code', h(async (r) => submitCode(r.body.code)));
+app.post('/api/auth/cancel', h(async () => cancelLogin()));
+app.post('/api/auth/logout', h(async () => logout()));
 
 /* settings */
 app.get('/api/config/raw', h(async () => ({ text: fs.readFileSync(CONFIG_PATH, 'utf8') })));

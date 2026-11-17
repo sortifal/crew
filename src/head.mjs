@@ -112,7 +112,7 @@ async function runTurn(text) {
     }
   } catch (e) {
     if (!abort.signal.aborted) {
-      const hint = /auth|api key|login/i.test(String(e.message)) ? ' — set ANTHROPIC_API_KEY before starting Crew, or run `claude login` once.' : '';
+      const hint = /auth|api key|login/i.test(String(e.message)) ? ' — use “Log in” in the top bar (or set ANTHROPIC_API_KEY).' : '';
       pushFeed(CHAT, { role: 'error', text: `Head error: ${e.message}${hint}` }, 'head_message');
     }
   } finally {

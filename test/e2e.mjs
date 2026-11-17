@@ -33,7 +33,9 @@ dataDir: ${path.join(tmp, 'data')}
 `);
 
 const PORT = 4400 + Math.floor(Math.random() * 400);
-const srv = spawn('node', ['src/server.mjs'], { env: { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), ANTHROPIC_API_KEY: 'sk-invalid' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const env = { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
+delete env.ANTHROPIC_API_KEY; delete env.CLAUDE_CODE_OAUTH_TOKEN;
+const srv = spawn('node', ['src/server.mjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let slog = ''; srv.stdout.on('data', (d) => (slog += d)); srv.stderr.on('data', (d) => (slog += d));
 const base = `http://127.0.0.1:${PORT}`;
 const api = async (m, u, b) => { const r = await fetch(base + u, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); const j = await r.json(); if (!r.ok) throw new Error(j.error); return j; };
@@ -95,11 +97,21 @@ try {
   // I: settings validation
   await assert.rejects(api('PUT', '/api/config/raw', { text: 'workers: []' }), /at least one worker/); ok('invalid config rejected, not saved');
 
-  // J: head error path (invalid key) is surfaced, server survives
-  await api('POST', '/api/head', { text: 'hello' });
-  const hc = await until(async () => { const s = await api('GET', '/api/state'); return !s.head.busy && s.headChat.length >= 2 && s.headChat; }, 'head turn', 90000);
-  console.log('  ℹ head chat entries:', hc.map((m) => `${m.role}: ${m.text.slice(0, 90)}`));
-  ok('head turn completes/fails gracefully');
+  // J: Claude login flow (fake binary)
+  assert.equal((await api('GET', '/api/auth/status')).loggedIn, false);
+  await assert.rejects(api('POST', '/api/head', { text: 'hello' }), /Not logged in/); ok('head refuses to run while logged out, with a clear message');
+  await api('POST', '/api/auth/login', {});
+  const lg = await until(async () => { const x = (await api('GET', '/api/auth/status')).login; return x.url && x; }, 'login url');
+  assert.match(lg.url, /oauth\/authorize/); ok('login starts and the authorize URL is surfaced');
+  await api('POST', '/api/auth/code', { code: 'wrong' });
+  await until(async () => (await api('GET', '/api/auth/status')).login.phase === 'idle', 'bad code ends login'); assert.equal((await api('GET', '/api/auth/status')).loggedIn, false); ok('wrong code does not log in');
+  await api('POST', '/api/auth/login', {});
+  await until(async () => (await api('GET', '/api/auth/status')).login.url, 'login url 2');
+  await api('POST', '/api/auth/code', { code: 'good-code' });
+  await until(async () => (await api('GET', '/api/auth/status')).loggedIn, 'logged in'); ok('correct code completes the login');
+  await api('POST', '/api/auth/logout', {}); assert.equal((await api('GET', '/api/auth/status')).loggedIn, false); ok('logout works');
+  await assert.rejects(api('POST', '/api/auth/code', { code: 'x' }), /no login in progress/); ok('code without a login in progress is rejected');
+
   console.log(`\nALL ${pass} CHECKS PASSED`);
 } catch (e) { console.error('\nFAILED:', e.message); process.exitCode = 1; }
 finally { srv.kill(); llm.close(); }

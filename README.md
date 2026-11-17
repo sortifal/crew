@@ -20,10 +20,10 @@ Runs the server, the Qwen Code CLI and git in one container. Workers (which run 
 
 ```bash
 ./docker-setup.sh /path/to/your/git/repo      # writes .env (PROJECT_DIR, your UID/GID, API key)
-$EDITOR .env                                  # add ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)
+$EDITOR .env                                  # optional: ANTHROPIC_API_KEY — or skip it and log in from the UI
 docker compose up -d --build                  # → http://127.0.0.1:4317
 ```
-Then open **⚙ Settings** in the UI: set the project name/branch, your workers, and the model name your local server exposes.
+Then open http://127.0.0.1:4317 and click **🔑 Log in to Claude** (top bar): open the link, authorise, paste the code back. The login (Claude subscription or Console) is stored in the `crew-home` volume and survives restarts; an API key in `.env` works too. Then open **⚙ Settings**: set the project name/branch, your workers, and the model name your local server exposes.
 
 - Your local model server runs on the host and is reached as `host.docker.internal` (pre-configured, port 8080). It must listen on `0.0.0.0`, not only `127.0.0.1` (`llama-server --host 0.0.0.0`, `OLLAMA_HOST=0.0.0.0`). On Linux you can instead use `network_mode: host` (see comment in `docker-compose.yml`) so `localhost` URLs work.
 - The project is bind-mounted at `/workspace/project`; approved tasks are merged straight into your working copy (it must be checked out on `baseBranch`, with no uncommitted changes to tracked files). The container runs as your UID so file ownership stays yours.
@@ -36,7 +36,7 @@ Then open **⚙ Settings** in the UI: set the project name/branch, your workers,
 ```bash
 # needs: node ≥ 20, git, the `qwen` CLI (Qwen Code), a local OpenAI-compatible server (llama.cpp / Ollama / vLLM)
 npm install
-export ANTHROPIC_API_KEY=sk-ant-...      # or run `claude login` once
+export ANTHROPIC_API_KEY=sk-ant-...      # optional – or log in from the UI (🔑 button)
 $EDITOR crew.config.yaml                 # set project.repo, your Qwen endpoint/model, worker names
 npm start                                # → http://127.0.0.1:4317
 ```
