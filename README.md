@@ -65,6 +65,9 @@ The target repo must be a git repo with at least one commit, **checked out on `b
 - Every task can carry a **check command** (tests/lint/build). Workers run it, and the system re-runs it after each attempt; on failure the worker **retries by itself** (`scheduler.autoRetries`) before the Head is woken up.
 - The Head is only woken for: ready for review, blocked, or failed after retries (`head.autoReview: false` to disable and drive it manually).
 
+## UI
+Light and dark themes (toggle in the sidebar; follows your system by default). The design language follows [Beautiful UI](https://www.beautifului.dev/) (MIT): OKLCH neutral tokens, hairline rings, pill buttons, 14/10/8 px radii, Inter + JetBrains Mono. Fonts are not bundled and nothing is fetched from the internet; install Inter / JetBrains Mono locally to get the exact look, otherwise system fonts are used.
+
 ## Files
 - `crew.config.yaml` – all configuration (also editable in the UI).
 - `data/` – tasks, chats, lessons, logs, git worktrees (`data/worktrees/tN`). Safe to back up; delete to reset.
