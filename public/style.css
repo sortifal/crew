@@ -138,7 +138,7 @@ dialog h3{margin:0 0 4px;font-size:15px;font-weight:600;letter-spacing:-.01em}di
 
 /* ── settings ── */
 dialog.wide{width:min(1040px,95vw);height:min(740px,90vh);padding:0;overflow:hidden}
-dialog.wide #modalBody{height:100%}dialog.wide .close{display:none}
+dialog.wide #modalBody{height:100%}dialog.wide #modalBody>.close{display:none}
 .set{display:flex;height:100%}
 .set-nav{width:176px;flex:none;background:var(--canvas);padding:14px 10px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line-soft)}
 .set-title{font-weight:600;font-size:15px;letter-spacing:-.01em;padding:2px 8px 12px}
