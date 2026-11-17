@@ -1,0 +1,31 @@
+services:
+  crew:
+    build: .
+    image: crew:latest
+    # Run as your host user so files in the mounted project keep your ownership.
+    # (set CREW_UID / CREW_GID in .env – run ./docker-setup.sh to do it for you)
+    user: "${CREW_UID:-1000}:${CREW_GID:-1000}"
+    ports:
+      - "127.0.0.1:${CREW_PORT:-4317}:4317"   # localhost only: the UI has no login
+    environment:
+      - ANTHROPIC_API_KEY                     # for the Opus head …
+      - CLAUDE_CODE_OAUTH_TOKEN               # … or a token from `claude setup-token`
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach your local model server on the host
+    # Linux alternative: drop `ports`/`extra_hosts` and use `network_mode: host` so that
+    # `localhost` URLs for llama.cpp/Ollama just work (UI then on http://127.0.0.1:4317).
+    volumes:
+      - ${PROJECT_DIR:?Set PROJECT_DIR in .env to the git repo the team should work on}:/workspace/project
+      - crew-data:/app/data        # tasks, chats, lessons, logs, worktrees
+      - crew-config:/app/config    # crew.config.yaml (edited from the UI)
+      - crew-home:/home/crew       # Qwen / Claude state
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  crew-data:
+  crew-config:
+  crew-home:

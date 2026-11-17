@@ -1,0 +1,41 @@
+# Default config inside Docker. Edit it from the web UI (⚙ Settings) – it is stored in the `crew-config` volume.
+# The host's PROJECT_DIR is mounted at /workspace/project.
+# Your local model server runs on the host: it is reachable as host.docker.internal
+# (it must listen on 0.0.0.0, not only 127.0.0.1 – e.g. `llama-server --host 0.0.0.0`, OLLAMA_HOST=0.0.0.0).
+
+project:
+  name: My Project
+  repo: /workspace/project
+  baseBranch: main
+
+head:
+  model: opus
+  autoReview: true
+
+workers:
+  - name: Mira
+    role: Backend developer
+    persona: Calm, precise, a bit dry. Explains her reasoning in one or two sentences.
+  - name: Theo
+    role: Frontend / tooling developer
+    persona: Enthusiastic, pragmatic, likes small commits. Admits mistakes quickly.
+
+qwen:
+  command: qwen
+  args: ["--yolo", "-p", "{prompt}"]
+  env:
+    OPENAI_BASE_URL: http://host.docker.internal:8080/v1
+    OPENAI_API_KEY: local
+    OPENAI_MODEL: qwen3-coder
+  endpoint: http://host.docker.internal:8080/v1
+  apiKey: local
+  model: qwen3-coder
+  timeoutMinutes: 30
+
+scheduler:
+  maxParallel: 1
+  autoRetries: 1
+  maxAttempts: 4
+
+lessons:
+  maxChars: 6000

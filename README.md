@@ -14,7 +14,24 @@ approves or sends them back, and **coaches them** so they stop repeating mistake
               review (diff) → approve = merge into main
 ```
 
-## Quick start (NixOS / any Linux)
+## Docker (recommended)
+
+Runs the server, the Qwen Code CLI and git in one container. Workers (which run with auto-approve) are then confined to the container: they only see the mounted project and Crew's own volumes.
+
+```bash
+./docker-setup.sh /path/to/your/git/repo      # writes .env (PROJECT_DIR, your UID/GID, API key)
+$EDITOR .env                                  # add ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN)
+docker compose up -d --build                  # → http://127.0.0.1:4317
+```
+Then open **⚙ Settings** in the UI: set the project name/branch, your workers, and the model name your local server exposes.
+
+- Your local model server runs on the host and is reached as `host.docker.internal` (pre-configured, port 8080). It must listen on `0.0.0.0`, not only `127.0.0.1` (`llama-server --host 0.0.0.0`, `OLLAMA_HOST=0.0.0.0`). On Linux you can instead use `network_mode: host` (see comment in `docker-compose.yml`) so `localhost` URLs work.
+- The project is bind-mounted at `/workspace/project`; approved tasks are merged straight into your working copy (it must be checked out on `baseBranch`, with no uncommitted changes to tracked files). The container runs as your UID so file ownership stays yours.
+- State lives in named volumes: `crew-data` (tasks, chats, lessons, logs, worktrees), `crew-config` (`crew.config.yaml`), `crew-home` (Qwen/Claude state). `docker compose down -v` wipes them.
+- While a task is running its git worktree lives in `crew-data`, so `git worktree list` on the host shows a path that only exists in the container. It is removed when the task is merged or cancelled (`git worktree prune` cleans up leftovers).
+- Not tested in CI: the image build was not run in the environment where this was written; the compose file and entrypoint were validated statically. If `npm install -g @qwen-code/qwen-code` or the Qwen flags changed, adjust the `Dockerfile` / config.
+
+## Quick start without Docker (NixOS / any Linux)
 
 ```bash
 # needs: node ≥ 20, git, the `qwen` CLI (Qwen Code), a local OpenAI-compatible server (llama.cpp / Ollama / vLLM)
