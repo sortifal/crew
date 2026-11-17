@@ -165,3 +165,12 @@ dialog.wide #modalBody{height:100%}dialog.wide #modalBody>.close{display:none}
 .envrow{display:grid;grid-template-columns:1fr 1.4fr 24px;gap:6px;align-items:center}.envrow .field{margin:2px 0}
 #roster .person.off{opacity:.5}
 @media(max-width:760px){.set{flex-direction:column}.set-nav{width:auto;flex-direction:row;overflow:auto}.grid2{grid-template-columns:1fr}.team{flex-direction:column}.agents{width:auto;margin:0}}
+
+/* live activity */
+.livecard{background:var(--surface);border-radius:14px;box-shadow:var(--shadow-card,var(--shadow-btn));padding:12px;margin:0 0 12px;cursor:pointer}
+.livecard .lh{display:flex;align-items:center;gap:10px}
+.livecard .nm{font-size:13px;font-weight:600}.livecard .sub{font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.livecard .ls{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3)}
+.livecard .quiet.warn{color:var(--orange)}
+.livecard .code{margin-top:10px}.livecard .lp{max-height:240px;font-size:11.5px}
+.person .sub.el{font:11px var(--mono);color:var(--ink-3)}

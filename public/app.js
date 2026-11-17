@@ -43,7 +43,7 @@ function md(s) {
 const STATUS = { queued: 'Queued', running: 'Running', review: 'Review', blocked: 'Blocked', needs_attention: 'Needs attention', done: 'Done', cancelled: 'Cancelled' };
 const badge = (st) => `<span class="badge ${st}">${STATUS[st] || st}</span>`;
 
-const S = { auth: null, authPhase: { phase: 'idle' }, config: null, tasks: new Map(), feeds: { team: [], head: [], dm: {} }, tab: 'head', unread: {}, selected: null, detail: null, live: '', headBusy: false, busySince: 0 };
+const S = { auth: null, authPhase: { phase: 'idle' }, config: null, tasks: new Map(), feeds: { team: [], head: [], dm: {} }, tab: 'head', unread: {}, selected: null, detail: null, live: '', headBusy: false, busySince: 0, act: new Map() };
 
 /* ───────── rendering ───────── */
 function renderHeader() {
@@ -65,7 +65,7 @@ function renderHeader() {
 
 function workerStatus(name) {
   const mine = [...S.tasks.values()].filter((t) => t.assignee === name);
-  const run = mine.find((t) => t.status === 'running'); if (run) return { cls: 'running', text: `#${run.id} ${run.title}` };
+  const run = mine.find((t) => t.status === 'running'); if (run) { const a = S.act.get(run.id); const last = a?.lines.length ? a.lines[a.lines.length - 1] : ''; return { cls: 'running', text: last ? `${last}` : `#${run.id} ${run.title}`, since: a?.startedAt }; }
   const bl = mine.find((t) => t.status === 'blocked'); if (bl) return { cls: 'blocked', text: `Blocked on #${bl.id}` };
   const q = mine.filter((t) => t.status === 'queued').length; if (q) return { cls: '', text: `${q} queued` };
   const rv = mine.find((t) => t.status === 'review'); if (rv) return { cls: 'review', text: `Awaiting review #${rv.id}` };
@@ -77,7 +77,7 @@ function renderRoster() {
   const people = [{ name: 'Head', tab: 'head', st: { cls: S.headBusy ? 'live' : '', text: S.headBusy ? 'Working…' : 'Opus · project lead' } }, ...S.config.workers.map((w) => ({ name: w.name, tab: 'dm:' + w.name, st: w.enabled === false ? { cls: '', text: 'Disabled' } : workerStatus(w.name), role: w.role, off: w.enabled === false }))];
   for (const p of people) {
     const d = document.createElement('div'); d.className = 'person' + (S.tab === p.tab ? ' sel' : '') + (p.off ? ' off' : '');
-    d.innerHTML = `${avatar(p.name)}<div style="min-width:0;flex:1"><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.st.text)}</div></div><span class="dot ${p.st.cls}"></span>`;
+    d.innerHTML = `${avatar(p.name)}<div style="min-width:0;flex:1"><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.st.text)}</div>${p.st.since ? `<div class="sub el" data-since="${p.st.since}"></div>` : ''}</div><span class="dot ${p.st.cls}"></span>`;
     d.title = p.role || 'Project head';
     d.onclick = () => openTab(p.tab);
     el.appendChild(d);
@@ -99,10 +99,10 @@ function renderBoard() {
 
 function renderTabs() {
   const el = $('#tabs'); el.innerHTML = '';
-  const tabs = [['head', 'Head'], ['team', 'Team'], ...S.config.workers.map((w) => ['dm:' + w.name, w.name])];
+  const tabs = [['head', 'Head'], ['team', 'Team'], ['live', 'Live'], ...S.config.workers.map((w) => ['dm:' + w.name, w.name])];
   for (const [id, label] of tabs) {
     const b = document.createElement('button'); b.className = S.tab === id ? 'on' : '';
-    b.innerHTML = esc(label) + (S.unread[id] ? `<span class="count">${S.unread[id]}</span>` : '');
+    b.innerHTML = (id === 'live' && S.act.size ? '<span class="dot live" style="margin-right:6px"></span>' : '') + esc(label) + (S.unread[id] ? `<span class="count">${S.unread[id]}</span>` : '');
     b.onclick = () => openTab(id); el.appendChild(b);
   }
 }
@@ -144,14 +144,41 @@ function renderDm(n) {
   return out.join('') || `<div class="empty"><b>${esc(n)}</b>Private chat. ${esc(n)} runs on your local model, remembers its lessons and knows its recent tasks.</div>`;
 }
 
+const fmtDur = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`; };
+function renderLive() {
+  const list = [...S.act.values()];
+  if (!list.length) return `<div class="empty"><b>Nothing running</b>When an agent is working you'll see its output, files and timing here, live.</div>`;
+  return list.map((a) => {
+    const files = (a.files || []).slice(0, 10).map((f) => `<span class="chip"><span class="mono">${esc(f)}</span></span>`).join('') + ((a.files || []).length > 10 ? `<span class="chip">+${a.files.length - 10} more</span>` : '');
+    return `<div class="livecard" data-task="${a.id}">
+      <div class="lh">${avatar(a.worker, 24)}<div style="min-width:0;flex:1"><div class="nm">${esc(a.worker)}<span class="mono ref"> #${a.id}${a.attempt > 1 ? ' · try ' + a.attempt : ''}</span></div><div class="sub">${esc(a.title)}</div></div>
+        <div class="ls"><span class="dot live"></span><span class="mono" data-since="${a.startedAt}"></span><span class="quiet mono" data-quiet="${a.lastOutputAt || 0}" data-start="${a.startedAt}"></span></div></div>
+      ${files ? `<div class="chips" style="margin:8px 0 0">${files}</div>` : ''}
+      <div class="code"><pre class="lp">${esc(a.lines.slice(-40).join('\n')) || '<span class="muted">waiting for output…</span>'}</pre></div>
+    </div>`;
+  }).join('');
+}
+function tickClocks() {
+  const now = Date.now();
+  document.querySelectorAll('[data-since]').forEach((el) => (el.textContent = fmtDur(now - +el.dataset.since)));
+  document.querySelectorAll('[data-quiet]').forEach((el) => { const q = now - (+el.dataset.quiet || +el.dataset.start); el.textContent = q > 30000 ? `quiet ${fmtDur(q)}` : ''; el.classList.toggle('warn', q > 120000); });
+}
+setInterval(tickClocks, 1000);
+let liveTimer = null;
+const refreshLive = () => { if (liveTimer) return; liveTimer = setTimeout(() => { liveTimer = null; renderRoster(); renderTabs(); if (S.tab === 'live') { renderChat(); } tickClocks(); }, 250); };
+
 function renderChat() {
   const el = $('#chat'); const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-  const body = S.tab === 'head' ? renderHeadChat() : S.tab === 'team' ? renderTeam() : renderDm(S.tab.slice(3));
+  const body = S.tab === 'head' ? renderHeadChat() : S.tab === 'team' ? renderTeam() : S.tab === 'live' ? renderLive() : renderDm(S.tab.slice(3));
   el.innerHTML = `<div class="col">${body}</div>`;
-  if (atBottom) el.scrollTop = el.scrollHeight;
+  if (S.tab === 'live') el.querySelectorAll('.lp').forEach((p) => (p.scrollTop = p.scrollHeight));
+  else if (atBottom) el.scrollTop = el.scrollHeight;
+  $('#composer').hidden = S.tab === 'live';
+  tickClocks();
   $('#input').placeholder = S.tab === 'head' ? 'Tell the Head what you want built…' : S.tab === 'team' ? 'Post to the team (@Name to ping)…' : `Message ${S.tab.slice(3)}…`;
 }
 
+document.addEventListener('click', (e) => { const c = e.target.closest?.('.livecard'); if (c && !e.target.closest('pre')) selectTask(+c.dataset.task); });
 function renderAll() { if (!S.config) return; renderHeader(); renderRoster(); renderBoard(); renderTabs(); renderChat(); hydrateIcons(); }
 
 async function openTab(id) {
@@ -446,11 +473,21 @@ $('#stop').onclick = () => api('POST', '/api/head/stop');
 
 /* ───────── live events ───────── */
 let detailTimer = null;
+function liveAppend(e) {
+  const a = S.act.get(e.id); if (!a) return;
+  a.lastOutputAt = Date.now();
+  const parts = ((a._p || '') + e.chunk).split('\n'); a._p = parts.pop();
+  for (const l of parts) if (l.trim()) a.lines.push(l.slice(0, 400));
+  if (a.lines.length > 200) a.lines.splice(0, a.lines.length - 200);
+  refreshLive();
+}
 const bump = (tab) => { if (S.tab !== tab) S.unread[tab] = (S.unread[tab] || 0) + 1; };
 function onEvent(e) {
   switch (e.type) {
     case 'task': S.tasks.set(e.task.id, e.task); renderRoster(); renderBoard(); if (S.selected === e.task.id) { clearTimeout(detailTimer); detailTimer = setTimeout(loadDetail, 400); } break;
-    case 'task_log': if (S.selected === e.id && S.detail && e.attempt === S.detail.attempts.length) { const L = $('#log'); if (L) { L.textContent += e.chunk; L.scrollTop = 1e9; } } break;
+    case 'live': if (e.entry) S.act.set(e.id, e.entry); else S.act.delete(e.id); refreshLive(); break;
+    case 'task_files': { const a = S.act.get(e.id); if (a) { a.files = e.files; refreshLive(); } break; }
+    case 'task_log': if (S.selected === e.id && S.detail && e.attempt === S.detail.attempts.length) { const L = $('#log'); if (L) { L.textContent += e.chunk; L.scrollTop = 1e9; } } liveAppend(e); break;
     case 'feed': if (e.feed === 'feed') { S.feeds.team.push(e.entry); bump('team'); renderTabs(); if (S.tab === 'team') renderChat(); } break;
     case 'head_message': S.feeds.head.push(e.entry); S.live = ''; if (e.entry.role === 'head' || e.entry.role === 'error') bump('head'); renderTabs(); if (S.tab === 'head') renderChat(); break;
     case 'head_delta': S.live += e.text; if (S.tab === 'head') renderChat(); break;
@@ -468,6 +505,7 @@ async function init() {
   S.config = st.config; S.repoError = st.repoError; S.headBusy = st.head.busy; S.cost = st.head.costUsd;
   if (S.headBusy) S.busySince = Date.now();
   st.tasks.forEach((t) => S.tasks.set(t.id, t));
+  (st.live || []).forEach((a) => S.act.set(a.id, a));
   S.feeds.team = st.feed; S.feeds.head = st.headChat;
   renderAll(); $('#chat').scrollTop = 1e9;
   refreshAuth();

@@ -73,6 +73,8 @@ A form-based **Settings** dialog (sidebar) replaces hand-editing YAML (still ava
 - **Workflow** – parallel runs, auto-retries, max attempts, lesson size.
 
 ## UI
+**Live tab:** one card per running agent with its task, elapsed time, the files it has touched so far (refreshed every ~4 s from its worktree), and a tail of its terminal output, streamed as it happens. A "quiet 2m" marker turns orange if an agent has produced no output for a while, which is usually a hung model call. The sidebar also shows each running agent's latest output line and timer. Click a card to open the task.
+
 Light and dark themes (toggle in the sidebar; follows your system by default). The design language follows [Beautiful UI](https://www.beautifului.dev/) (MIT): OKLCH neutral tokens, hairline rings, pill buttons, 14/10/8 px radii, Inter + JetBrains Mono. Fonts are not bundled and nothing is fetched from the internet; install Inter / JetBrains Mono locally to get the exact look, otherwise system fonts are used.
 
 ## Files

@@ -24,7 +24,7 @@ const fullConfig = () => ({ project: config.project, head: config.head, workers:
 
 app.get('/api/state', h(async () => ({
   config: publicConfig(), repoError, head: headState(), tasks: allTasks(),
-  feed: getFeed('feed'), headChat: getFeed('head-chat'), lessonScopes: scopes(),
+  live: T.liveSnapshot(), feed: getFeed('feed'), headChat: getFeed('head-chat'), lessonScopes: scopes(),
 })));
 
 app.get('/api/events', (req, res) => {

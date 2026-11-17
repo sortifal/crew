@@ -8,6 +8,10 @@ import { lessonsFor, addLesson } from './lessons.mjs';
 
 export const hooks = { attention: null }; // set by head.mjs: (task, reason) => void
 const procs = new Map(); // taskId -> child
+const live = new Map();  // taskId -> live activity (what a running agent is doing right now)
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07/g;
+const clean = (s) => s.replace(ANSI, '').replace(/\r(?!\n)/g, '\n');
+export const liveSnapshot = () => [...live.values()];
 const starting = new Set();
 
 const say = (worker, text, extra = {}) => pushFeed('feed', { from: worker, kind: 'worker', text, ...extra });
@@ -111,16 +115,33 @@ async function runAttempt(t) {
     try { child = spawn(q.command, args, { cwd: wt, env, stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (e) { log.write(`spawn failed: ${e.message}\n`); return resolve({ code: 127 }); }
     procs.set(t.id, child);
-    let buf = '', timer = null;
-    const flush = () => { timer = null; if (buf) { emit('task_log', { id: t.id, attempt: attempt.n, chunk: buf }); buf = ''; } };
-    const onData = (d) => { log.write(d); buf += d.toString(); if (!timer) timer = setTimeout(flush, 300); };
+    const entry = { id: t.id, worker: worker.name, title: t.title, attempt: attempt.n, startedAt: Date.now(), lastOutputAt: null, lines: [], files: [] };
+    live.set(t.id, entry); emit('live', { id: t.id, entry });
+    let buf = '', partial = '', timer = null;
+    const flush = () => { timer = null; if (buf) { emit('task_log', { id: t.id, attempt: attempt.n, chunk: clean(buf) }); buf = ''; } };
+    const onData = (d) => {
+      log.write(d); const txt = d.toString(); buf += txt;
+      const parts = (partial + clean(txt)).split('\n'); partial = parts.pop();
+      for (const l of parts) if (l.trim()) entry.lines.push(l.slice(0, 400));
+      if (entry.lines.length > 200) entry.lines.splice(0, entry.lines.length - 200);
+      entry.lastOutputAt = Date.now();
+      if (!timer) timer = setTimeout(flush, 300);
+    };
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
+    const poll = setInterval(async () => { // which files has the agent touched so far?
+      const r = await G.git(wt, ['status', '--porcelain'], { allowFail: true }).catch(() => null);
+      if (!r || !live.has(t.id)) return;
+      const files = r.out.split('\n').filter(Boolean).map((l) => l.trim()).slice(0, 60);
+      if (JSON.stringify(files) !== JSON.stringify(entry.files)) { entry.files = files; emit('task_files', { id: t.id, files }); }
+    }, 4000);
+    child.on('close', () => clearInterval(poll));
     const killer = setTimeout(() => { attempt.timedOut = true; child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000); }, eff.timeoutMinutes * 60000);
     child.on('error', (e) => { log.write(`\n[crew] process error: ${e.message}\n`); });
     child.on('close', (code, sig) => { clearTimeout(killer); flush(); resolve({ code: code ?? 1, sig }); });
   });
   procs.delete(t.id);
+  if (live.delete(t.id)) emit('live', { id: t.id, entry: null });
   log.end();
   attempt.exit = exit.code;
   attempt.endedAt = Date.now();

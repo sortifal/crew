@@ -151,6 +151,12 @@ try {
   await api('POST', '/api/auth/logout', {}); assert.equal((await api('GET', '/api/auth/status')).loggedIn, false); ok('logout works');
   await assert.rejects(api('POST', '/api/auth/code', { code: 'x' }), /no login in progress/); ok('code without a login in progress is rejected');
 
+  // L: live activity
+  const sl = await api('POST', '/api/tasks', { title: 'Slow one', brief: 'SLOWLIVE please', assignee: 'Theo' });
+  const act = await until(async () => (await api('GET', '/api/state')).live.find((x) => x.id === sl.id && x.lines.length && x.files.length), 'live entry with output and files', 15000);
+  assert.equal(act.worker, 'Theo'); assert.ok(act.lines.some((l) => l === 'step one'), 'ANSI stripped'); assert.ok(act.files.some((f) => f.includes('early.txt'))); ok('running agent exposes live output and changed files');
+  await waitFor(sl.id, 'review'); assert.equal((await api('GET', '/api/state')).live.length, 0); ok('live entry disappears when the agent finishes');
+
   console.log(`\nALL ${pass} CHECKS PASSED`);
 } catch (e) { console.error('\nFAILED:', e.message); process.exitCode = 1; }
 finally { srv.kill(); llm.close(); }
