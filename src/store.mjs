@@ -56,3 +56,12 @@ export function createTaskRecord(fields) {
 }
 export function persistTasks() { save('tasks.json', T()); }
 export function touch(t) { t.updatedAt = Date.now(); persistTasks(); emit('task', { task: t }); }
+
+export function renameFeed(from, to) {
+  const fs_ = fs;
+  const a = file(`${from}.json`), b = file(`${to}.json`);
+  const list = feedFor(from);
+  feeds.delete(from);
+  feeds.set(to, list);
+  try { fs_.renameSync(a, b); } catch { save(`${to}.json`, list); }
+}

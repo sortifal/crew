@@ -74,9 +74,9 @@ function workerStatus(name) {
 
 function renderRoster() {
   const el = $('#roster'); el.innerHTML = '';
-  const people = [{ name: 'Head', tab: 'head', st: { cls: S.headBusy ? 'live' : '', text: S.headBusy ? 'Working…' : 'Opus · project lead' } }, ...S.config.workers.map((w) => ({ name: w.name, tab: 'dm:' + w.name, st: workerStatus(w.name), role: w.role }))];
+  const people = [{ name: 'Head', tab: 'head', st: { cls: S.headBusy ? 'live' : '', text: S.headBusy ? 'Working…' : 'Opus · project lead' } }, ...S.config.workers.map((w) => ({ name: w.name, tab: 'dm:' + w.name, st: w.enabled === false ? { cls: '', text: 'Disabled' } : workerStatus(w.name), role: w.role, off: w.enabled === false }))];
   for (const p of people) {
-    const d = document.createElement('div'); d.className = 'person' + (S.tab === p.tab ? ' sel' : '');
+    const d = document.createElement('div'); d.className = 'person' + (S.tab === p.tab ? ' sel' : '') + (p.off ? ' off' : '');
     d.innerHTML = `${avatar(p.name)}<div style="min-width:0;flex:1"><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.st.text)}</div></div><span class="dot ${p.st.cls}"></span>`;
     d.title = p.role || 'Project head';
     d.onclick = () => openTab(p.tab);
@@ -224,12 +224,165 @@ function renderDetail() {
 const modal = $('#modal');
 function openModal(html) { $('#modalBody').innerHTML = `<button class="close" id="mClose">${ic('x')}</button>` + html; $('#mClose').onclick = () => modal.close(); modal.showModal(); }
 
-$('#btnSettings').onclick = async () => {
-  const { text } = await api('GET', '/api/config/raw');
-  openModal(`<h3>Settings</h3><p>crew.config.yaml — workers, models, Qwen endpoint, scheduler. Applies immediately on save.</p><textarea id="cfg" class="field mono" rows="24" spellcheck="false" style="font:12px/1.55 var(--mono)"></textarea><div class="actions"><button class="btn" id="saveCfg">Save</button><span id="cfgMsg" class="muted"></span></div>`);
-  $('#cfg').value = text;
-  $('#saveCfg').onclick = async () => { try { const r = await api('PUT', '/api/config/raw', { text: $('#cfg').value }); $('#cfgMsg').textContent = r.repoError ? '⚠ saved, but: ' + r.repoError : '✔ saved'; } catch (e) { $('#cfgMsg').textContent = '✖ ' + e.message; } };
-};
+/* ───────── settings (structured) ───────── */
+const SET = { draft: null, tab: 'team', sel: 0, dirty: false, open: false, models: [] };
+const getP = (o, p) => p.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
+const setP = (o, p, v) => { const ks = p.split('.'); const last = ks.pop(); const t = ks.reduce((a, k) => (a[k] ??= {}), o); t[last] = v; };
+const fld = (label, inner, help = '') => `<div class="fr"><label>${label}</label>${inner}${help ? `<div class="help">${help}</div>` : ''}</div>`;
+const inp = (path, { type = 'text', ph = '', as = '', list = '', cls = '' } = {}) => `<input class="field ${cls}" type="${type}" data-b="${path}" data-as="${as}" placeholder="${esc(ph)}" ${list ? `list="${list}"` : ''} autocomplete="off" spellcheck="false">`;
+const area = (path, rows, ph = '', as = '') => `<textarea class="field" rows="${rows}" data-b="${path}" data-as="${as}" placeholder="${esc(ph)}" spellcheck="false"></textarea>`;
+const sw = (path, label) => `<label class="sw"><input type="checkbox" data-b="${path}"><span class="knob"></span><span>${label}</span></label>`;
+const W = () => SET.draft.workers[SET.sel];
+
+function panelGeneral() {
+  return `<h3>General</h3>
+  <div class="grp"><h4>Project</h4>
+    ${fld('Name', inp('project.name'))}
+    ${fld('Repository path', inp('project.repo', { ph: '/workspace/project' }), 'A git repo with at least one commit, checked out on the base branch. In Docker this is the mounted <code>/workspace/project</code>.')}
+    ${fld('Base branch', inp('project.baseBranch', { ph: 'main' }), 'Tasks branch from it and approved work is merged into it.')}
+    ${fld('Conventions & context', area('project.context', 5, 'e.g. “TypeScript strict. Tests with vitest. Never edit generated files.”'), 'Included in the Head\'s prompt and in every developer brief.')}
+  </div>
+  <div class="grp"><h4>Head (Opus)</h4>
+    ${fld('Model', inp('head.model', { list: 'headModels', ph: 'opus' }), 'An alias (<code>opus</code>, <code>sonnet</code>, <code>haiku</code>) or a full model id.<datalist id="headModels"><option>opus</option><option>sonnet</option><option>haiku</option></datalist>')}
+    ${sw('head.autoReview', 'Wake the Head automatically when a task is ready for review, blocked or failed')}
+    ${fld('Extra instructions', area('head.instructions', 5, 'e.g. “Be strict about tests. Prefer many small tasks. Answer me in French.”'), 'Added to the Head\'s system prompt.')}
+  </div>`;
+}
+
+function panelTeam() {
+  const ws = SET.draft.workers;
+  const list = ws.map((w, i) => `<button class="ag ${i === SET.sel ? 'on' : ''}" data-ag="${i}">${avatar(w.name || '?', 22)}<span class="agn"><b>${esc(w.name || '(unnamed)')}</b><small>${esc(w.role)}</small></span>${w.enabled === false ? '<span class="badge">off</span>' : ''}</button>`).join('');
+  const w = W();
+  const form = !w ? '<div class="empty" style="margin:40px auto"><b>No agents</b>Add an agent to get started.</div>' : `
+    <div class="row between" style="margin-bottom:6px"><h3 style="margin:0">${esc(w.name || 'New agent')}</h3>${sw(`workers.${SET.sel}.enabled`, 'Enabled')}</div>
+    <div class="grid2">${fld('Name', inp(`workers.${SET.sel}.name`), 'Letters, digits, - and _. Renaming keeps its tasks, lessons and chats.')}${fld('Role', inp(`workers.${SET.sel}.role`, { ph: 'Backend developer' }))}</div>
+    ${fld('Persona', area(`workers.${SET.sel}.persona`, 3, 'Calm, precise, a bit dry…'), 'Tone and character: shapes its messages, chats and briefs.')}
+    ${fld('Standing instructions', area(`workers.${SET.sel}.instructions`, 4, 'e.g. “Prefer small commits. Always add a test for bug fixes.”'), 'Always included in this agent\'s task briefs.')}
+    <div class="grp"><h4>Model <span class="muted" style="font-weight:400">— leave empty to use the defaults from “Local model”</span></h4>
+      <div class="grid2">${fld('Model', inp(`workers.${SET.sel}.model`, { list: 'modelList', ph: `default: ${SET.draft.qwen.model}` }))}${fld('Endpoint', inp(`workers.${SET.sel}.endpoint`, { ph: `default: ${SET.draft.qwen.endpoint}` }))}</div>
+      <div class="row"><button class="btn secondary sm" data-test="agent">Test endpoint</button><span class="help" id="test-agent"></span></div>
+    </div>
+    <div class="grp"><h4>Limits <span class="muted" style="font-weight:400">— empty = defaults</span></h4>
+      <div class="grid2">${fld('Timeout (minutes)', inp(`workers.${SET.sel}.timeoutMinutes`, { type: 'number', as: 'num', ph: `default: ${SET.draft.qwen.timeoutMinutes}` }))}${fld('Auto-retries', inp(`workers.${SET.sel}.autoRetries`, { type: 'number', as: 'num', ph: `default: ${SET.draft.scheduler.autoRetries}` }), 'Retries on failing checks before the Head is called.')}</div>
+    </div>
+    <div class="actions"><button class="btn danger" data-rm="1">Remove agent</button></div>`;
+  return `<div class="team"><div class="agents"><div class="agl">${list}</div><button class="btn secondary sm" data-add="1" style="margin:8px">${ic('plus')}Add agent</button></div><div class="agf">${form}</div></div>`;
+}
+
+function panelModel() {
+  const env = Object.entries(SET.draft.qwen.env || {});
+  return `<h3>Local model</h3><p class="muted" style="margin-top:0">Defaults for all agents. Each agent can override model and endpoint in the Team tab.</p>
+  <div class="grid2">${fld('Endpoint (OpenAI-compatible)', inp('qwen.endpoint', { ph: 'http://localhost:8080/v1' }), 'In Docker use <code>host.docker.internal</code> instead of localhost.')}${fld('API key', inp('qwen.apiKey', { type: 'password', ph: 'local' }))}</div>
+  <div class="row" style="margin-bottom:8px"><button class="btn secondary sm" data-test="global">Test connection</button><span class="help" id="test-global"></span></div>
+  <div class="grid2">${fld('Default model', inp('qwen.model', { list: 'modelList', ph: 'qwen3-coder' }), 'Pick from the list after testing the connection.')}${fld('Timeout per run (minutes)', inp('qwen.timeoutMinutes', { type: 'number', as: 'num' }))}</div>
+  <datalist id="modelList">${SET.models.map((m) => `<option>${esc(m)}</option>`).join('')}</datalist>
+  <div class="grp"><h4>Agent CLI</h4>
+    ${fld('Command', inp('qwen.command', { ph: 'qwen' }), 'Any CLI agent that takes a prompt works, e.g. <code>opencode</code>.')}
+    ${fld('Arguments (one per line)', area('qwen.args', 3, '--yolo\n-p\n{prompt}', 'lines'), '<code>{prompt}</code> is replaced by a short pointer to the task brief.')}
+    <div class="fr"><label>Environment variables</label><div class="envs">${env.map(([k, v], i) => `<div class="envrow"><input class="field" data-ek="${i}" value="${esc(k)}" placeholder="NAME"><input class="field" data-ev="${i}" value="${esc(v)}" placeholder="value"><button class="close" data-erm="${i}" title="Remove">${ic('x')}</button></div>`).join('')}</div><button class="btn secondary sm" data-eadd="1">${ic('plus')}Add variable</button><div class="help">Passed to the CLI. <code>OPENAI_MODEL</code> / <code>OPENAI_BASE_URL</code> are overridden per agent when set there.</div></div>
+  </div>`;
+}
+
+function panelWorkflow() {
+  return `<h3>Workflow</h3>
+  <div class="grid2">${fld('Parallel runs', inp('scheduler.maxParallel', { type: 'number', as: 'num' }), 'Agents working at the same time. One GPU usually serves one run best.')}${fld('Auto-retries', inp('scheduler.autoRetries', { type: 'number', as: 'num' }), 'Default for agents: retries on failing checks before the Head is woken up.')}</div>
+  <div class="grid2">${fld('Max attempts per task', inp('scheduler.maxAttempts', { type: 'number', as: 'num' }), 'Including rejections by the Head or you.')}${fld('Lessons injected (characters)', inp('lessons.maxChars', { type: 'number', as: 'num' }), 'Newest lessons are kept when the text is longer.')}</div>`;
+}
+
+function panelAdvanced() {
+  return `<h3>Advanced — raw YAML</h3><p class="muted" style="margin-top:0">Saving here replaces the form settings (unsaved form changes are discarded).</p><textarea id="rawYaml" class="field" rows="22" spellcheck="false" style="font:12px/1.55 var(--mono)"></textarea><div class="actions"><button class="btn" id="saveYaml">Save YAML</button></div>`;
+}
+
+const TABS = [['general', 'General', panelGeneral], ['team', 'Team', panelTeam], ['model', 'Local model', panelModel], ['workflow', 'Workflow', panelWorkflow], ['advanced', 'Advanced', panelAdvanced]];
+
+async function openSettings(tab = 'team') {
+  const cfg = await api('GET', '/api/config');
+  cfg.workers.forEach((w) => (w._orig = w.name));
+  Object.assign(SET, { draft: cfg, tab, sel: 0, dirty: false, open: true, models: SET.models || [] });
+  modal.classList.add('wide'); modal.showModal(); renderSettings();
+}
+function renderSettings(msg = '', cls = '') {
+  const panel = TABS.find((t) => t[0] === SET.tab)[2]();
+  $('#modalBody').innerHTML = `<div class="set"><nav class="set-nav"><div class="set-title">Settings</div>${TABS.map(([id, label]) => `<button class="${SET.tab === id ? 'on' : ''}" data-tab="${id}">${label}</button>`).join('')}</nav>
+    <div class="set-main"><div class="set-body">${panel}</div><div class="set-foot"><span id="setMsg" class="${cls}">${esc(msg)}</span><div class="row"><button class="btn ghost" id="setDiscard">Close</button><button class="btn" id="setSave" ${SET.dirty ? '' : 'disabled'}>Save changes</button></div></div></div></div>`;
+  hydrateIcons($('#modalBody'));
+  wireSettings();
+}
+const markDirty = () => { SET.dirty = true; const b = $('#setSave'); if (b) b.disabled = false; const m = $('#setMsg'); if (m) { m.textContent = 'Unsaved changes'; m.className = ''; } };
+
+function wireSettings() {
+  const root = $('#modalBody');
+  root.querySelectorAll('[data-b]').forEach((el) => {
+    const path = el.dataset.b, as = el.dataset.as; const v = getP(SET.draft, path);
+    if (el.type === 'checkbox') el.checked = path.endsWith('.enabled') ? v !== false : !!v;
+    else if (as === 'lines') el.value = (v || []).join('\n');
+    else el.value = v ?? '';
+    el.addEventListener('input', () => {
+      let val = el.type === 'checkbox' ? el.checked : el.value;
+      if (as === 'num') val = el.value === '' ? null : Number(el.value);
+      if (as === 'lines') val = el.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      setP(SET.draft, path, val); markDirty();
+      if (/workers\.\d+\.(name|enabled|role)$/.test(path)) { const i = SET.sel; const it = root.querySelector(`[data-ag="${i}"]`); const w = SET.draft.workers[i]; if (it) { it.querySelector('b').textContent = w.name || '(unnamed)'; it.querySelector('small').textContent = w.role; it.querySelector('.avatar').outerHTML = avatar(w.name || '?', 22); let off = it.querySelector('.badge'); if (w.enabled === false && !off) it.insertAdjacentHTML('beforeend', '<span class="badge">off</span>'); if (w.enabled !== false && off) off.remove(); } const h3 = root.querySelector('.agf h3'); if (h3) h3.textContent = w.name || 'New agent'; }
+    });
+  });
+  root.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => { SET.tab = b.dataset.tab; renderSettings(); if (SET.tab === 'advanced') loadYaml(); }));
+  root.querySelectorAll('[data-ag]').forEach((b) => (b.onclick = () => { SET.sel = +b.dataset.ag; renderSettings(); }));
+  const add = root.querySelector('[data-add]'); if (add) add.onclick = () => {
+    let n = SET.draft.workers.length + 1; const names = new Set(SET.draft.workers.map((w) => w.name.toLowerCase()));
+    while (names.has('dev' + n)) n++;
+    SET.draft.workers.push({ name: 'Dev' + n, role: 'Developer', persona: '', enabled: true, model: '', endpoint: '', instructions: '', timeoutMinutes: null, autoRetries: null });
+    SET.sel = SET.draft.workers.length - 1; markDirty(); renderSettings('Unsaved changes');
+  };
+  const rm = root.querySelector('[data-rm]'); if (rm) rm.onclick = () => {
+    const w = W(); if (!confirm(`Remove ${w.name}? Its lessons are kept on disk; finished tasks keep its name.`)) return;
+    SET.draft.workers.splice(SET.sel, 1); SET.sel = Math.max(0, SET.sel - 1); markDirty(); renderSettings('Unsaved changes');
+  };
+  root.querySelectorAll('[data-test]').forEach((b) => (b.onclick = async () => {
+    const isAgent = b.dataset.test === 'agent'; const out = $(isAgent ? '#test-agent' : '#test-global');
+    const endpoint = (isAgent && W().endpoint) || SET.draft.qwen.endpoint; out.textContent = 'Testing…'; out.style.color = '';
+    try {
+      const r = await api('POST', '/api/test-endpoint', { endpoint, apiKey: SET.draft.qwen.apiKey });
+      if (r.ok) { SET.models = r.models; out.textContent = `✔ reachable in ${r.ms} ms · ${r.models.length} model${r.models.length === 1 ? '' : 's'}${r.models.length ? ': ' + r.models.slice(0, 4).join(', ') + (r.models.length > 4 ? '…' : '') : ''}`; out.style.color = 'var(--green)'; const dl = $('#modelList'); if (dl) dl.innerHTML = r.models.map((m) => `<option>${esc(m)}</option>`).join(''); }
+      else { out.textContent = '✖ ' + r.message; out.style.color = 'var(--red)'; }
+    } catch (e) { out.textContent = '✖ ' + e.message; out.style.color = 'var(--red)'; }
+  }));
+  // environment variable rows
+  const envObj = () => SET.draft.qwen.env || (SET.draft.qwen.env = {});
+  const rebuild = (rows) => { SET.draft.qwen.env = Object.fromEntries(rows.filter(([k]) => k.trim())); };
+  root.querySelectorAll('[data-ek],[data-ev]').forEach((el) => el.addEventListener('change', () => {
+    const rows = Object.entries(envObj()).map(([k, v]) => [k, v]);
+    root.querySelectorAll('.envrow').forEach((r, i) => { rows[i] = [r.querySelector('[data-ek]').value, r.querySelector('[data-ev]').value]; });
+    rebuild(rows); markDirty();
+  }));
+  root.querySelectorAll('[data-erm]').forEach((b) => (b.onclick = () => { const rows = Object.entries(envObj()); rows.splice(+b.dataset.erm, 1); rebuild(rows); markDirty(); renderSettings('Unsaved changes'); }));
+  const ea = root.querySelector('[data-eadd]'); if (ea) ea.onclick = () => { const e = envObj(); let k = 'NEW_VAR'; while (k in e) k += '_'; e[k] = ''; markDirty(); renderSettings('Unsaved changes'); };
+
+  $('#setSave').onclick = saveSettings;
+  $('#setDiscard').onclick = closeSettings;
+  const sy = $('#saveYaml'); if (sy) sy.onclick = async () => {
+    try { const r = await api('PUT', '/api/config/raw', { text: $('#rawYaml').value }); const cfg = await api('GET', '/api/config'); cfg.workers.forEach((w) => (w._orig = w.name)); SET.draft = cfg; SET.dirty = false; renderSettings(r.repoError ? '⚠ Saved, but: ' + r.repoError : '✔ Saved', r.repoError ? 'warn' : 'ok'); SET.tab = 'advanced'; loadYaml(); }
+    catch (e) { $('#setMsg').textContent = '✖ ' + e.message; $('#setMsg').className = 'bad'; }
+  };
+}
+async function loadYaml() { const { text } = await api('GET', '/api/config/raw'); const t = $('#rawYaml'); if (t) t.value = text; }
+
+async function saveSettings() {
+  const draft = JSON.parse(JSON.stringify(SET.draft));
+  const renames = {}; draft.workers.forEach((w) => { if (w._orig && w._orig !== w.name) renames[w.name] = w._orig; });
+  draft.workers.forEach((w) => delete w._orig);
+  const btn = $('#setSave'); btn.disabled = true;
+  try {
+    const r = await api('PUT', '/api/config', { config: draft, renames });
+    r.config.workers.forEach((w) => (w._orig = w.name));
+    const names = SET.draft.workers[SET.sel]?.name; SET.draft = r.config; SET.dirty = false;
+    SET.sel = Math.max(0, SET.draft.workers.findIndex((w) => w.name === names));
+    renderSettings(r.repoError ? '⚠ Saved, but: ' + r.repoError : '✔ Saved — applies immediately', r.repoError ? 'warn' : 'ok');
+  } catch (e) { btn.disabled = false; const m = $('#setMsg'); m.textContent = '✖ ' + e.message; m.className = 'bad'; }
+}
+function closeSettings() { if (SET.dirty && !confirm('Discard unsaved changes?')) return; SET.dirty = false; modal.close(); }
+modal.addEventListener('cancel', (e) => { if (SET.open && SET.dirty && !confirm('Discard unsaved changes?')) e.preventDefault(); });
+modal.addEventListener('close', () => { SET.open = false; modal.classList.remove('wide'); });
+$('#btnSettings').onclick = () => openSettings('team');
 
 $('#btnLessons').onclick = async () => {
   const scopes = ['project', ...S.config.workers.map((w) => w.name)];
@@ -305,7 +458,7 @@ function onEvent(e) {
     case 'head_cleared': S.feeds.head = []; renderChat(); break;
     case 'dm': { const n = e.feed.slice(3); const name = S.config.workers.find((w) => w.name.toLowerCase() === n)?.name || n; (S.feeds.dm[name] ||= []).push(e.entry); if (e.entry.role !== 'user') bump('dm:' + name); renderTabs(); if (S.tab === 'dm:' + name) renderChat(); break; }
     case 'auth': S.authPhase = e; if (e.phase === 'done') { S.auth = e.status ? { ...e.status } : S.auth; setTimeout(() => { if (S.authOpen && S.authPhase.phase === 'done') modal.close(); }, 1200); refreshAuth(); } if (S.authOpen) renderAuthModal(); break;
-    case 'config': S.config = e.config; S.repoError = e.repoError; renderAll(); break;
+    case 'config': S.config = e.config; S.repoError = e.repoError; if (S.tab.startsWith('dm:') && !S.config.workers.some((w) => w.name === S.tab.slice(3))) S.tab = 'head'; for (const k of Object.keys(S.feeds.dm)) if (!S.config.workers.some((w) => w.name === k)) delete S.feeds.dm[k]; renderAll(); break;
   }
 }
 

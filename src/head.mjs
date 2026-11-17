@@ -57,7 +57,7 @@ function buildTools() {
 }
 
 function buildSystem() {
-  const workers = config.workers.map((w) => `- ${w.name} — ${w.role}${w.persona ? ` (${w.persona})` : ''}`).join('\n');
+  const workers = config.workers.map((w) => `- ${w.name} — ${w.role}${w.persona ? ` (${w.persona})` : ''}${w.enabled ? '' : ' [DISABLED – do not assign]'}`).join('\n');
   const board = allTasks().filter((t) => !['done', 'cancelled'].includes(t.status)).map((t) => `#${t.id} [${t.status}] ${t.title} → ${t.assignee}`).join('\n') || '(empty)';
   return `You are Head, the project lead of "${config.project.name}". You talk with the user (the owner) and run a small team of developers.
 
@@ -74,7 +74,7 @@ The developers run on a smaller local model. They are capable but literal, can d
 - Messages starting with [system] are automatic notifications about the board, not the user. Handle them (review, answer, re-plan), then briefly tell the user what you did.
 - Talk to the user concisely and plainly. Say what is happening and what you need from them, if anything.
 
-## Board right now
+${config.project.context.trim() ? `## Project conventions (from the owner)\n${config.project.context.trim()}\n\n` : ''}${config.head.instructions.trim() ? `## Extra instructions from the owner\n${config.head.instructions.trim()}\n\n` : ''}## Board right now
 ${board}`;
 }
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { config, workerByName } from './config.mjs';
+import { config, workerByName, workerSettings } from './config.mjs';
 import { allTasks, getTask, createTaskRecord, touch, pushFeed, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
 import { lessonsFor, addLesson } from './lessons.mjs';
@@ -18,10 +18,13 @@ const tail = (s, n) => (s.length > n ? '…' + s.slice(-n) : s);
 export function createTask({ title, brief, assignee, acceptance = [], verify = '', dependsOn = [], by = 'head' }) {
   if (!title?.trim() || !brief?.trim()) throw new Error('title and brief are required');
   let w = assignee ? workerByName(assignee) : null;
-  if (assignee && !w) throw new Error(`unknown worker "${assignee}". Workers: ${config.workers.map((x) => x.name).join(', ')}`);
-  if (!w) { // least-loaded worker
+  const active = config.workers.filter((x) => x.enabled);
+  if (assignee && !w) throw new Error(`unknown worker "${assignee}". Workers: ${active.map((x) => x.name).join(', ')}`);
+  if (w && !w.enabled) throw new Error(`worker "${w.name}" is disabled. Enabled workers: ${active.map((x) => x.name).join(', ') || '(none)'}`);
+  if (!w) { // least-loaded enabled worker
+    if (!active.length) throw new Error('all workers are disabled – enable one in Settings → Team');
     const load = (n) => allTasks().filter((t) => t.assignee === n && ['queued', 'running', 'blocked'].includes(t.status)).length;
-    w = [...config.workers].sort((a, b) => load(a.name) - load(b.name))[0];
+    w = [...active].sort((a, b) => load(a.name) - load(b.name))[0];
   }
   for (const d of dependsOn) if (!getTask(d)) throw new Error(`dependency task #${d} does not exist`);
   const t = createTaskRecord({ title: title.trim(), brief: brief.trim(), assignee: w.name, acceptance, verify: verify.trim(), dependsOn, createdBy: by, autoRetried: 0 });
@@ -54,6 +57,8 @@ function buildBrief(t, worker) {
     `You work in your own git worktree (the current directory). Only change files inside it.`,
     `## What to do\n${t.brief}`,
   ];
+  if (config.project.context.trim()) parts.push(`## Project conventions\n${config.project.context.trim()}`);
+  if (worker.instructions.trim()) parts.push(`## Standing instructions for you\n${worker.instructions.trim()}`);
   if (t.acceptance.length) parts.push('## Acceptance criteria\n' + t.acceptance.map((a) => `- ${a}`).join('\n'));
   if (t.verify) parts.push(`## How your work is checked\nAfter you finish, this command is run in your directory and must exit 0:\n\`\`\`\n${t.verify}\n\`\`\`\nRun it yourself before finishing and fix what fails.`);
   if (answers.length) parts.push('## Decisions already made (do not ask again)\n' + answers.map((f) => `- ${f.text}`).join('\n'));
@@ -95,8 +100,11 @@ async function runAttempt(t) {
   const log = fs.createWriteStream(logPath);
   const prompt = 'Read the file .crew/BRIEF.md in the current directory and carry out the task described there. Follow its rules exactly.';
   const q = config.qwen;
+  const eff = workerSettings(worker);
   const args = (q.args || []).map((a) => String(a).replace('{prompt}', prompt));
   const env = { ...process.env, ...Object.fromEntries(Object.entries(q.env || {}).map(([k, v]) => [k, String(v)])), CREW_TASK_ID: String(t.id), CREW_WORKER: worker.name };
+  if (worker.model) env.OPENAI_MODEL = worker.model;        // per-agent overrides
+  if (worker.endpoint) env.OPENAI_BASE_URL = worker.endpoint;
 
   const exit = await new Promise((resolve) => {
     let child;
@@ -108,7 +116,7 @@ async function runAttempt(t) {
     const onData = (d) => { log.write(d); buf += d.toString(); if (!timer) timer = setTimeout(flush, 300); };
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
-    const killer = setTimeout(() => { attempt.timedOut = true; child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000); }, (q.timeoutMinutes || 30) * 60000);
+    const killer = setTimeout(() => { attempt.timedOut = true; child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000); }, eff.timeoutMinutes * 60000);
     child.on('error', (e) => { log.write(`\n[crew] process error: ${e.message}\n`); });
     child.on('close', (code, sig) => { clearTimeout(killer); flush(); resolve({ code: code ?? 1, sig }); });
   });
@@ -150,11 +158,11 @@ async function runAttempt(t) {
   }
 
   const why = exit.code !== 0
-    ? (attempt.timedOut ? `the worker timed out after ${q.timeoutMinutes} min` : `the worker exited with code ${exit.code}`)
+    ? (attempt.timedOut ? `the worker timed out after ${eff.timeoutMinutes} min` : `the worker exited with code ${exit.code}`)
     : !changed ? 'no changes were made to the code'
     : `the check command failed (exit ${attempt.verify.code})`;
   const detail = attempt.verify && !verifyOk ? `\nOutput of \`${t.verify}\`:\n${tail(attempt.verify.output, 2500)}` : '';
-  const canRetry = t.autoRetried < config.scheduler.autoRetries && t.attempts.length < config.scheduler.maxAttempts;
+  const canRetry = t.autoRetried < eff.autoRetries && t.attempts.length < config.scheduler.maxAttempts;
   if (canRetry) {
     t.autoRetried++;
     t.feedback.push({ from: 'checks', text: `Your last attempt was not accepted: ${why}.${detail}`, attempt: attempt.n });
@@ -192,6 +200,7 @@ export function tick() {
   const busy = new Set(allTasks().filter((t) => t.status === 'running').map((t) => t.assignee));
   for (const t of allTasks().filter((x) => x.status === 'queued').sort((a, b) => a.id - b.id)) {
     if (slots <= 0) break;
+    if (!workerByName(t.assignee)?.enabled) continue; // disabled or removed: task waits
     if (busy.has(t.assignee) || starting.has(t.id)) continue;
     if (!t.dependsOn.every((d) => getTask(d)?.status === 'done')) continue;
     slots--; busy.add(t.assignee); starting.add(t.id);

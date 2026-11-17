@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import { ROOT, CONFIG_PATH, config, loadConfig, saveConfigText, workerByName } from './config.mjs';
-import { bus, allTasks, getTask, getFeed, pushFeed, clearFeed } from './store.mjs';
+import { ROOT, CONFIG_PATH, config, loadConfig, saveConfigText, saveConfigObject, normalize, workerByName } from './config.mjs';
+import { bus, allTasks, getTask, getFeed, pushFeed, clearFeed, renameFeed, persistTasks, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
 import * as T from './tasks.mjs';
 import { sendToHead, stopHead, resetHead, headState } from './head.mjs';
@@ -20,6 +20,7 @@ app.use(express.static(path.join(ROOT, 'public')));
 
 const h = (fn) => async (req, res) => { try { res.json((await fn(req)) ?? { ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } };
 const publicConfig = () => ({ project: config.project, head: config.head, workers: config.workers, scheduler: config.scheduler, qwen: { model: config.qwen.model, endpoint: config.qwen.endpoint } });
+const fullConfig = () => ({ project: config.project, head: config.head, workers: config.workers, qwen: config.qwen, scheduler: config.scheduler, lessons: config.lessons });
 
 app.get('/api/state', h(async () => ({
   config: publicConfig(), repoError, head: headState(), tasks: allTasks(),
@@ -75,6 +76,50 @@ app.post('/api/auth/login', h(async (r) => startLogin({ console: !!r.body.consol
 app.post('/api/auth/code', h(async (r) => submitCode(r.body.code)));
 app.post('/api/auth/cancel', h(async () => cancelLogin()));
 app.post('/api/auth/logout', h(async () => logout()));
+
+/* structured settings */
+app.get('/api/config', h(async () => fullConfig()));
+app.put('/api/config', h(async (r) => {
+  const next = r.body.config; const renames = r.body.renames || {}; // { newName: oldName }
+  if (!next) throw new Error('config missing');
+  normalize(JSON.parse(JSON.stringify(next))); // validate fully before touching anything
+  const newNames = new Set(next.workers.map((w) => w.name.toLowerCase()));
+  const kept = new Set(Object.values(renames).map((n) => n.toLowerCase()));
+  const active = ['queued', 'running', 'blocked', 'review', 'needs_attention'];
+  for (const w of config.workers) {
+    const gone = !newNames.has(w.name.toLowerCase()) && !kept.has(w.name.toLowerCase());
+    const renamed = Object.values(renames).some((o) => o.toLowerCase() === w.name.toLowerCase());
+    const busy = allTasks().filter((t) => t.assignee === w.name && active.includes(t.status));
+    if (gone && busy.length) throw new Error(`Cannot remove ${w.name}: ${busy.length} unfinished task(s) (${busy.map((t) => '#' + t.id).join(', ')}). Finish or cancel them, or just disable the agent.`);
+    if (renamed && busy.some((t) => t.status === 'running')) throw new Error(`Cannot rename ${w.name} while it is running a task.`);
+  }
+  // rename migration (tasks, lessons, DM history) – two-phase so name swaps work
+  const pairs = Object.entries(renames).filter(([n, o]) => n !== o && workerByName(o));
+  if (pairs.length) {
+    const map = Object.fromEntries(pairs.map(([n, o]) => [o.toLowerCase(), n]));
+    for (const t of allTasks()) { const n = map[t.assignee.toLowerCase()]; if (n) t.assignee = n; }
+    persistTasks();
+    const fsm = fs;
+    pairs.forEach(([, o], i) => { renameFeed(`dm-${o.toLowerCase()}`, `dm-__tmp${i}`); const lf = dataPath('lessons', `${o.toLowerCase()}.md`); if (fsm.existsSync(lf)) fsm.renameSync(lf, dataPath('lessons', `__tmp${i}.md`)); });
+    pairs.forEach(([n], i) => { renameFeed(`dm-__tmp${i}`, `dm-${n.toLowerCase()}`); const tf = dataPath('lessons', `__tmp${i}.md`); if (fsm.existsSync(tf)) fsm.renameSync(tf, dataPath('lessons', `${n.toLowerCase()}.md`)); });
+  }
+  saveConfigObject(next);
+  repoError = ''; try { await G.ensureRepo(); } catch (e) { repoError = e.message; }
+  for (const t of allTasks()) emit('task', { task: t });
+  bus.emit('event', { type: 'config', config: publicConfig(), repoError });
+  return { config: fullConfig(), repoError };
+}));
+app.post('/api/test-endpoint', h(async (r) => {
+  const ep = String(r.body.endpoint || '').replace(/\/$/, ''); if (!/^https?:\/\//.test(ep)) throw new Error('endpoint must start with http:// or https://');
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${ep}/models`, { headers: { authorization: `Bearer ${r.body.apiKey || config.qwen.apiKey || 'local'}` }, signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return { ok: false, message: `HTTP ${res.status} from ${ep}/models` };
+    const j = await res.json().catch(() => ({}));
+    const models = (j.data || j.models || []).map((m) => m.id || m.name || m.model).filter(Boolean);
+    return { ok: true, ms: Date.now() - t0, models };
+  } catch (e) { return { ok: false, message: `Cannot reach ${ep}: ${e.cause?.code || e.message}. From Docker, use host.docker.internal instead of localhost.` }; }
+}));
 
 /* settings */
 app.get('/api/config/raw', h(async () => ({ text: fs.readFileSync(CONFIG_PATH, 'utf8') })));

@@ -12,4 +12,5 @@ if echo "$B" | grep -q FLAKY; then echo good > flaky.txt; fi
 f="out_$CREW_TASK_ID.txt"; echo "hello from $CREW_WORKER" > "$f"
 if echo "$B" | grep -q "mock-lesson-marker"; then echo "SAW LESSON" >> "$f"; fi
 if echo "$B" | grep -q "Feedback on your previous attempt"; then echo "FIXED" >> "$f"; fi
-echo "I wrote $f." > .crew/REPORT.md
+if echo "$B" | grep -q "Standing instructions"; then echo "STANDING" >> "$f"; fi
+echo "I wrote $f. model=$OPENAI_MODEL" > .crew/REPORT.md

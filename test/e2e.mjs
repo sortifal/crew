@@ -12,7 +12,7 @@ const sh = (c, cwd = repo) => execSync(c, { cwd, stdio: 'pipe' }).toString();
 sh('git init -q -b main && git config user.email t@t && git config user.name t && echo hi > README.md && git add -A && git commit -qm init');
 
 // fake OpenAI-compatible server for DMs
-const llm = http.createServer((req, res) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')})` } }] })); }); });
+const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model})` } }] })); }); });
 await new Promise((r) => llm.listen(0, r));
 const llmPort = llm.address().port;
 
@@ -95,7 +95,46 @@ try {
   ok('@mention in team channel reaches the worker');
 
   // I: settings validation
-  await assert.rejects(api('PUT', '/api/config/raw', { text: 'workers: []' }), /at least one worker/); ok('invalid config rejected, not saved');
+  await assert.rejects(api('PUT', '/api/config/raw', { text: 'workers: []' }), /at least one agent/); ok('invalid config rejected, not saved');
+
+  // K: structured settings – add an agent with per-agent overrides
+  const cfg0 = await api('GET', '/api/config'); assert.equal(cfg0.workers.length, 2); assert.equal(cfg0.workers[0].enabled, true);
+  const withZed = { ...cfg0, workers: [...cfg0.workers, { name: 'Zed', role: 'QA', persona: 'blunt', enabled: true, model: 'special-model', endpoint: '', instructions: 'Be nice', timeoutMinutes: null, autoRetries: null }] };
+  await api('PUT', '/api/config', { config: withZed, renames: {} });
+  assert.equal((await api('GET', '/api/state')).config.workers.length, 3); assert.match(fs.readFileSync(cfgPath, 'utf8'), /Zed/); ok('add agent via settings API, persisted to YAML');
+  const z = await api('POST', '/api/tasks', { title: 'Zed task', brief: 'do it', assignee: 'Zed' }); await waitFor(z.id, 'review');
+  const zd = await api('GET', `/api/tasks/${z.id}`); assert.match(zd.attempts[0].report, /model=special-model/); assert.match(zd.diff.patch, /STANDING/); ok('per-agent model override and standing instructions reach the worker');
+  await api('POST', '/api/dm/Zed', { text: 'yo' }); const zdm = await until(async () => { const x = await api('GET', '/api/dm/Zed'); return x.length >= 2 && x; }, 'zed dm'); assert.match(zdm[1].text, /model special-model/); ok('per-agent model is used for chat too');
+
+  // L: rename migrates tasks, lessons and chat history
+  await api('PUT', '/api/lessons/Zed', { text: '- zed lesson' });
+  const cfg1 = await api('GET', '/api/config'); cfg1.workers.find((w) => w.name === 'Zed').name = 'Zoe';
+  await api('PUT', '/api/config', { config: cfg1, renames: { Zoe: 'Zed' } });
+  assert.equal((await api('GET', '/api/state')).tasks.find((t) => t.id === z.id).assignee, 'Zoe');
+  assert.match((await api('GET', '/api/lessons/Zoe')).text, /zed lesson/); assert.ok((await api('GET', '/api/dm/Zoe')).length >= 2); ok('rename migrates tasks, lessons and chat history');
+
+  // M: remove – refused while unfinished work exists
+  const cfg2 = await api('GET', '/api/config'); cfg2.workers = cfg2.workers.filter((w) => w.name !== 'Zoe');
+  await assert.rejects(api('PUT', '/api/config', { config: cfg2, renames: {} }), /unfinished task/); ok('removing an agent with unfinished tasks is refused');
+  await api('POST', `/api/tasks/${z.id}/approve`, {}); await api('PUT', '/api/config', { config: cfg2, renames: {} });
+  assert.equal((await api('GET', '/api/state')).config.workers.length, 2); ok('agent can be removed once its work is done');
+
+  // N: disable
+  const cfg3 = await api('GET', '/api/config'); cfg3.workers.find((w) => w.name === 'Theo').enabled = false; await api('PUT', '/api/config', { config: cfg3, renames: {} });
+  await assert.rejects(api('POST', '/api/tasks', { title: 'x', brief: 'y', assignee: 'Theo' }), /disabled/);
+  const auto = await api('POST', '/api/tasks', { title: 'auto', brief: 'y' }); assert.equal(auto.assignee, 'Mira'); ok('disabled agents get no tasks; auto-assign skips them');
+  await api('POST', `/api/tasks/${auto.id}/cancel`, {}); cfg3.workers.find((w) => w.name === 'Theo').enabled = true; await api('PUT', '/api/config', { config: cfg3, renames: {} });
+
+  // O: validation
+  const bad = (mut) => { const c = JSON.parse(JSON.stringify(cfg3)); mut(c); return api('PUT', '/api/config', { config: c, renames: {} }); };
+  await assert.rejects(bad((c) => (c.scheduler.maxParallel = 0)), /max parallel/);
+  await assert.rejects(bad((c) => (c.workers[1].name = c.workers[0].name)), /duplicate/);
+  await assert.rejects(bad((c) => (c.workers[0].name = 'Head')), /reserved/);
+  await assert.rejects(bad((c) => (c.workers[0].timeoutMinutes = -3)), /timeout/); ok('invalid settings are rejected with clear messages');
+
+  // P: endpoint test
+  const te = await api('POST', '/api/test-endpoint', { endpoint: `http://127.0.0.1:${llmPort}/v1` }); assert.equal(te.ok, true); assert.deepEqual(te.models, ['fake-a', 'fake-b']);
+  assert.equal((await api('POST', '/api/test-endpoint', { endpoint: 'http://127.0.0.1:1/v1' })).ok, false); ok('endpoint test lists models / reports unreachable');
 
   // J: Claude login flow (fake binary)
   assert.equal((await api('GET', '/api/auth/status')).loggedIn, false);

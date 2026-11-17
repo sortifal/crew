@@ -41,7 +41,7 @@ $EDITOR crew.config.yaml                 # set project.repo, your Qwen endpoint/
 npm start                                # → http://127.0.0.1:4317
 ```
 On NixOS: `nix-shell -p nodejs_22 git` (and install Qwen Code with `npm i -g @qwen-code/qwen-code`).
-Everything can also be edited later from **⚙ Settings** in the UI (applies instantly).
+Everything is configured from **Settings** in the UI (applies instantly) — see below; `crew.config.yaml` is just where it is stored.
 
 The target repo must be a git repo with at least one commit, **checked out on `baseBranch`** (that is where approved work is merged).
 
@@ -64,6 +64,13 @@ The target repo must be a git repo with at least one commit, **checked out on `b
 - The Head never writes code; workers do the token-heavy part locally.
 - Every task can carry a **check command** (tests/lint/build). Workers run it, and the system re-runs it after each attempt; on failure the worker **retries by itself** (`scheduler.autoRetries`) before the Head is woken up.
 - The Head is only woken for: ready for review, blocked, or failed after retries (`head.autoReview: false` to disable and drive it manually).
+
+## Settings
+A form-based **Settings** dialog (sidebar) replaces hand-editing YAML (still available under *Advanced*):
+- **General** – project name/repo/base branch, shared *conventions & context* (included in the Head's prompt and every brief), Head model, auto-review, extra Head instructions.
+- **Team** – add / remove / rename / disable agents. Per agent: role, persona, standing instructions, model and endpoint overrides (e.g. a bigger model for the hard tasks, or a second GPU box), timeout, auto-retries. Renaming keeps an agent's tasks, lessons and chat history; removing is refused while it has unfinished tasks (disable it instead).
+- **Local model** – endpoint + key with a *Test connection* button that lists the models the server exposes, default model, agent CLI command / arguments / environment variables.
+- **Workflow** – parallel runs, auto-retries, max attempts, lesson size.
 
 ## UI
 Light and dark themes (toggle in the sidebar; follows your system by default). The design language follows [Beautiful UI](https://www.beautifului.dev/) (MIT): OKLCH neutral tokens, hairline rings, pill buttons, 14/10/8 px radii, Inter + JetBrains Mono. Fonts are not bundled and nothing is fetched from the internet; install Inter / JetBrains Mono locally to get the exact look, otherwise system fonts are used.

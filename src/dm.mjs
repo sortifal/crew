@@ -1,4 +1,4 @@
-import { config, workerByName } from './config.mjs';
+import { config, workerByName, workerSettings } from './config.mjs';
 import { allTasks, pushFeed, getFeed } from './store.mjs';
 import { lessonsFor } from './lessons.mjs';
 
@@ -11,7 +11,7 @@ function system(w) {
     return `- #${t.id} "${t.title}" [${t.status}]${t.question ? ` (your question: ${t.question})` : ''}${rep ? ` — your last report: ${rep.slice(0, 300)}` : ''}`;
   }).join('\n') || '(nothing yet)';
   const lessons = lessonsFor(w.name);
-  return `You are ${w.name}, ${w.role} on the project "${config.project.name}". ${w.persona}
+  return `You are ${w.name}, ${w.role} on the project "${config.project.name}". ${w.persona}${w.instructions ? `\nYour standing instructions: ${w.instructions}` : ''}
 You are chatting with the project owner, like a colleague on a team chat. Reply naturally in 1–4 sentences, in first person, in character. Do not use markdown headings.
 Be honest: only describe work that appears below. If you do not know, say so. You cannot change code in this chat; for changes, the owner or the Head creates a task.
 Your recent tasks:
@@ -24,7 +24,7 @@ export async function dm(name, text) {
   if (!w) throw new Error(`unknown worker "${name}"`);
   pushFeed(feedName(w.name), { role: 'user', text }, 'dm');
   const history = getFeed(feedName(w.name), 20).filter((m) => m.role !== 'error').map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
-  const q = config.qwen;
+  const q = workerSettings(w);
   try {
     const res = await fetch(`${q.endpoint.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
