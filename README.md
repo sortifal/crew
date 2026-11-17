@@ -1,0 +1,62 @@
+# ⚓ Crew
+
+A web UI where **Opus is your project head** and **local Qwen models are your developers**.
+You chat with the Head; it plans, writes task briefs, assigns them to named developers, reviews their diffs,
+approves or sends them back, and **coaches them** so they stop repeating mistakes.
+
+```
+ you ──chat──▶ Head (Opus, Claude Agent SDK, read-only on the repo)
+                │ create_task / get_task / approve / reject / add_lesson …
+                ▼
+        task board ──▶ worker runs (Qwen Code CLI, one git worktree per task)
+                          │ commit → run your check command → auto-retry on failure
+                          ▼
+              review (diff) → approve = merge into main
+```
+
+## Quick start (NixOS / any Linux)
+
+```bash
+# needs: node ≥ 20, git, the `qwen` CLI (Qwen Code), a local OpenAI-compatible server (llama.cpp / Ollama / vLLM)
+npm install
+export ANTHROPIC_API_KEY=sk-ant-...      # or run `claude login` once
+$EDITOR crew.config.yaml                 # set project.repo, your Qwen endpoint/model, worker names
+npm start                                # → http://127.0.0.1:4317
+```
+On NixOS: `nix-shell -p nodejs_22 git` (and install Qwen Code with `npm i -g @qwen-code/qwen-code`).
+Everything can also be edited later from **⚙ Settings** in the UI (applies instantly).
+
+The target repo must be a git repo with at least one commit, **checked out on `baseBranch`** (that is where approved work is merged).
+
+## Using it
+
+| Where | What |
+|---|---|
+| **🧭 Head** | Describe what you want. The Head asks sharp questions, creates tasks, reviews, reports back. |
+| **💬 Team** | Live channel: workers announce start/finish/blockers. `@Mira do X` DMs a worker, `@head …` pings the Head. |
+| **@Name** | Private chat with a developer (runs on your local model, in persona, knows its lessons and recent tasks). |
+| **Board / task panel** | Status, brief, worker report, check output, diff, live log. You can approve, send back (with feedback + a lesson), answer a blocked worker, retry, cancel — the Head can do all of this too. |
+| **🧠 Lessons** | The team's memory (per worker + project-wide). Edit or delete freely. |
+
+### How "learning from mistakes" works
+1. A task fails checks / is rejected / a worker gets stuck.
+2. The Head (or you) records a short imperative **lesson** (`add_lesson`, or the "lesson" box when sending back).
+3. Lessons live in `data/lessons/*.md` and are **injected into every future brief** of that worker (project-wide ones into everyone's) and into their DM persona. The newest `lessons.maxChars` are kept.
+
+### Keeping Opus cheap
+- The Head never writes code; workers do the token-heavy part locally.
+- Every task can carry a **check command** (tests/lint/build). Workers run it, and the system re-runs it after each attempt; on failure the worker **retries by itself** (`scheduler.autoRetries`) before the Head is woken up.
+- The Head is only woken for: ready for review, blocked, or failed after retries (`head.autoReview: false` to disable and drive it manually).
+
+## Files
+- `crew.config.yaml` – all configuration (also editable in the UI).
+- `data/` – tasks, chats, lessons, logs, git worktrees (`data/worktrees/tN`). Safe to back up; delete to reset.
+- `src/` – `tasks.mjs` (engine/scheduler), `head.mjs` (Opus head + tools), `dm.mjs`, `git.mjs`, `lessons.mjs`, `server.mjs`.
+- `npm test` – end-to-end test with a mock worker (no GPU / API key needed).
+
+## Notes & limits
+- The server binds to `127.0.0.1` and has **no authentication**; do not expose it. Workers run with `--yolo` (auto-approve) inside the task's worktree — they can still run arbitrary shell commands as your user, so use a repo/container you trust.
+- Qwen Code flags/env names change between releases; adjust `qwen.args` / `qwen.env` in the config if needed (`{prompt}` is replaced by a short pointer to `.crew/BRIEF.md`). Any CLI agent that takes a prompt works (e.g. `opencode run "{prompt}"`).
+- `maxParallel` defaults to 1 because one GPU serves one model well; raise it if your server batches requests.
+- Merges are `--no-ff` into `baseBranch`; on a conflict the merge is aborted and you're told to send the task back for a rebase.
+- Not yet tested against a real Opus session or a real Qwen Code install (verified with a mock worker and a stub LLM server); expect to tune the Head's system prompt in `src/head.mjs` and the worker brief in `src/tasks.mjs` after a few real runs.

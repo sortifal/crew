@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crew</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ctext y=%2712.5%27 font-size=%2713%27%3E⚓%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">⚓ Crew <span id="project" class="muted"></span></div>
+  <div class="grow"></div>
+  <span id="headState" class="pill"></span>
+  <button id="btnLessons" class="ghost">🧠 Lessons</button>
+  <button id="btnSettings" class="ghost">⚙ Settings</button>
+</header>
+<div id="banner" class="banner" hidden></div>
+<main>
+  <aside id="left">
+    <h3>Team</h3>
+    <div id="roster"></div>
+    <h3>Board <button id="btnNew" class="mini">+ task</button></h3>
+    <div id="board"></div>
+  </aside>
+  <section id="center">
+    <nav id="tabs"></nav>
+    <div id="chat"></div>
+    <form id="composer">
+      <textarea id="input" rows="2" placeholder="Message…  (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="send">Send</button>
+      <button id="stop" type="button" class="ghost" hidden>■ Stop</button>
+    </form>
+  </section>
+  <aside id="right" hidden></aside>
+</main>
+<dialog id="modal"><div id="modalBody"></div></dialog>
+<script src="app.js" type="module"></script>
+</body>
+</html>

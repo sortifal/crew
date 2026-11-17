@@ -1,0 +1,42 @@
+# ── Crew configuration ─────────────────────────────────────────────
+# Editable from the web UI (Settings) – changes apply without restart.
+
+project:
+  name: My Project
+  repo: /path/to/your/git/repo      # must be a git repo with at least one commit
+  baseBranch: main                  # branch tasks are branched from and merged into
+
+head:                               # the project head (Anthropic, via Claude Agent SDK)
+  model: opus                       # alias or full model id
+  autoReview: true                  # wake the head automatically when a task needs it
+  # Auth: set ANTHROPIC_API_KEY, or be logged in with `claude login`.
+
+workers:                            # your "developers" (run on local Qwen)
+  - name: Mira
+    role: Backend developer
+    persona: Calm, precise, a bit dry. Explains her reasoning in one or two sentences.
+  - name: Theo
+    role: Frontend / tooling developer
+    persona: Enthusiastic, pragmatic, likes small commits. Admits mistakes quickly.
+
+qwen:
+  # Command used to run a worker on a task, in the task's git worktree.
+  command: qwen
+  args: ["--yolo", "-p", "{prompt}"]   # {prompt} is replaced by a short pointer to .crew/BRIEF.md
+  env:                                  # passed to the CLI (Qwen Code reads these)
+    OPENAI_BASE_URL: http://localhost:8080/v1
+    OPENAI_API_KEY: local
+    OPENAI_MODEL: qwen3-coder
+  # Used for direct chat with workers (DMs). Same OpenAI-compatible server.
+  endpoint: http://localhost:8080/v1
+  apiKey: local
+  model: qwen3-coder
+  timeoutMinutes: 30
+
+scheduler:
+  maxParallel: 1          # parallel worker runs (your GPU is the limit)
+  autoRetries: 1          # times a worker retries by itself when tests fail, before the head is bothered
+  maxAttempts: 4          # total attempts per task (incl. head rejections)
+
+lessons:
+  maxChars: 6000          # how much lessons text is injected into each task brief
