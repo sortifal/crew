@@ -1,8 +1,11 @@
 FROM node:22-bookworm-slim
 
 # git: worktrees/merges · bash: task check commands · qwen: the developer agent
+# The rest is the agents' sandbox toolbox: sudo (passwordless, inside the container only) plus common
+# build tools, so workers can `sudo apt-get install` / pip / npm whatever the task needs.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git bash ca-certificates \
+ && apt-get install -y --no-install-recommends git bash ca-certificates sudo gosu \
+      build-essential python3 python3-pip python3-venv curl wget jq ripgrep unzip zip make pkg-config openssh-client \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system safe.directory '*' \
  && npm install -g @qwen-code/qwen-code \
@@ -19,6 +22,7 @@ RUN mkdir -p /app/data /app/config /home/crew /workspace/project \
  && chmod 777 /app/data /app/config /home/crew
 
 ENV HOME=/home/crew \
+    CREW_SANDBOX=1 \
     HOST=0.0.0.0 \
     PORT=4317 \
     CREW_CONFIG=/app/config/crew.config.yaml \

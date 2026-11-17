@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { config, workerByName, workerSettings } from './config.mjs';
 import { allTasks, getTask, createTaskRecord, touch, pushFeed, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
@@ -75,13 +75,20 @@ function buildBrief(t, worker) {
 - Keep changes minimal and focused on this task. Do not refactor unrelated code.
 - Do not run \`git commit\`, \`git push\`, or change branches; the system commits for you.
 - When finished, write a short first-person report to \`.crew/REPORT.md\` (3–6 lines: what you did, files touched, anything you are unsure about).
-- If you are blocked and need a decision, write ONE clear question to \`.crew/QUESTION.md\` and stop. Do not guess on important decisions.`);
+${process.env.CREW_SANDBOX ? '- You are inside a disposable sandbox container with passwordless `sudo`: install whatever tools or packages you need (`sudo apt-get install -y …`, pip, npm, cargo…). Prefer project-local installs (venv, node_modules) so the work stays reproducible, add dependencies to the project\'s manifest, and name any system packages the project needs in your report. If apt reports a lock, wait a few seconds and retry. Keep all project changes inside this working directory.\n' : ''}- If you are blocked and need a decision, write ONE clear question to \`.crew/QUESTION.md\` and stop. Do not guess on important decisions.`);
   pending.forEach((f) => (f.used = true));
   answers.forEach((f) => (f.used = true));
   return parts.join('\n\n');
 }
 
 /* ───────────── running a worker ───────────── */
+
+// Agents in the sandbox may use sudo and leave root-owned files behind; hand them back so Crew can commit/clean up.
+async function reown(dir) {
+  if (!process.env.CREW_SANDBOX || !process.getuid || process.getuid() === 0) return;
+  await new Promise((r) => execFile('sudo', ['-n', 'chown', '-R', `${process.getuid()}:${process.getgid()}`, dir], () => r()));
+}
+
 
 async function runAttempt(t) {
   const worker = workerByName(t.assignee);
@@ -143,6 +150,7 @@ async function runAttempt(t) {
   procs.delete(t.id);
   if (live.delete(t.id)) emit('live', { id: t.id, entry: null });
   log.end();
+  await reown(wt);
   attempt.exit = exit.code;
   attempt.endedAt = Date.now();
   if (t.status === 'cancelled') return;

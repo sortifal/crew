@@ -33,7 +33,7 @@ dataDir: ${path.join(tmp, 'data')}
 `);
 
 const PORT = 4400 + Math.floor(Math.random() * 400);
-const env = { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
+const env = { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), CREW_SANDBOX: '1', CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
 delete env.ANTHROPIC_API_KEY; delete env.CLAUDE_CODE_OAUTH_TOKEN;
 const srv = spawn('node', ['src/server.mjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let slog = ''; srv.stdout.on('data', (d) => (slog += d)); srv.stderr.on('data', (d) => (slog += d));
@@ -54,6 +54,7 @@ try {
   const det = await api('GET', `/api/tasks/${a.id}`);
   assert.match(det.diff.patch, /hello from Mira/); assert.match(det.attempts[0].report, /I wrote/); assert.equal(det.attempts[0].verify.code, 0); ok('diff, report and check result captured');
   assert.ok(!det.diff.patch.includes('.crew')); ok('.crew scratch files not committed');
+  assert.match(det.diff.patch, /SANDBOXNOTE/); ok('sandbox note (sudo/install allowed) is in the brief');
   await api('POST', `/api/tasks/${a.id}/approve`, {}); await waitFor(a.id, 'done');
   assert.ok(fs.existsSync(path.join(repo, 'out_1.txt'))); assert.match(sh('git log --oneline'), /Merge task #1/); ok('approve merges into main');
   assert.ok(!fs.existsSync(path.join(tmp, 'data/worktrees/t1'))); ok('worktree cleaned up after merge');

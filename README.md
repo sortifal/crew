@@ -31,6 +31,12 @@ Then open http://127.0.0.1:4317 and click **🔑 Log in to Claude** (top bar): o
 - While a task is running its git worktree lives in `crew-data`, so `git worktree list` on the host shows a path that only exists in the container. It is removed when the task is merged or cancelled (`git worktree prune` cleans up leftovers).
 - Not tested in CI: the image build was not run in the environment where this was written; the compose file and entrypoint were validated statically. If `npm install -g @qwen-code/qwen-code` or the Qwen flags changed, adjust the `Dockerfile` / config.
 
+### The agents' sandbox
+The container is the sandbox: workers run as a user with **passwordless `sudo` inside the container**, so they can `sudo apt-get install`, `pip install`, `npm i -g`, start servers, etc. without touching your host OS. The image ships with python3/pip/venv, build-essential, curl, jq, ripgrep and friends, and each brief tells the agent it may install what it needs (preferably project-local, and to list system packages in its report). Your host only sees the mounted project folder and whatever network the container can reach.
+- System-level installs (apt) live in the container, so they are lost when the image is rebuilt/recreated. For packages every task needs, put commands in `/app/config/sandbox-setup.sh` (kept in the config volume, runs as root at each start), e.g. `docker compose exec crew sh -c 'echo "apt-get update && apt-get install -y golang" > /app/config/sandbox-setup.sh'`.
+- Files agents create as root via `sudo` are handed back to your user after every attempt so commits and cleanup keep working.
+- Not a hard security boundary: the project folder is writable, and the container can reach your LAN and the model server. Cap resources by uncommenting `mem_limit` / `cpus` / `pids_limit` in `docker-compose.yml`. Existing installs: run `docker compose up -d --build` again (the compose file no longer pins `user:` or drops capabilities, because `sudo` needs them).
+
 ## Quick start without Docker (NixOS / any Linux)
 
 ```bash

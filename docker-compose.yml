@@ -2,12 +2,14 @@ services:
   crew:
     build: .
     image: crew:latest
-    # Run as your host user so files in the mounted project keep your ownership.
-    # (set CREW_UID / CREW_GID in .env – run ./docker-setup.sh to do it for you)
-    user: "${CREW_UID:-1000}:${CREW_GID:-1000}"
+    # The entrypoint creates a user with your host UID/GID (set CREW_UID / CREW_GID in .env, or run
+    # ./docker-setup.sh) so files in the mounted project keep your ownership, then drops root. That user
+    # has passwordless sudo inside the container: agents can install anything without touching your host.
     ports:
       - "127.0.0.1:${CREW_PORT:-4317}:4317"   # localhost only: the UI has no login
     environment:
+      - CREW_UID=${CREW_UID:-1000}
+      - CREW_GID=${CREW_GID:-1000}
       - ANTHROPIC_API_KEY                     # for the Opus head …
       - CLAUDE_CODE_OAUTH_TOKEN               # … or a token from `claude setup-token`
     extra_hosts:
@@ -20,10 +22,10 @@ services:
       - crew-config:/app/config    # crew.config.yaml (edited from the UI)
       - crew-home:/home/crew       # Qwen / Claude state
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+    # Sandbox limits (uncomment to cap what runaway agents can use):
+    #mem_limit: 16g
+    #cpus: 8
+    #pids_limit: 2048
 
 volumes:
   crew-data:
