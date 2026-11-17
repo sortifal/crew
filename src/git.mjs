@@ -19,7 +19,12 @@ export async function ensureRepo() {
   const r = await git(repo, ['rev-parse', '--git-dir'], { allowFail: true });
   if (r.code) throw new Error(`${repo} is not a git repository`);
   const b = await git(repo, ['rev-parse', '--verify', config.project.baseBranch], { allowFail: true });
-  if (b.code) throw new Error(`base branch "${config.project.baseBranch}" not found (does the repo have a commit?)`);
+  if (b.code) {
+    const head = await git(repo, ['rev-parse', '--verify', 'HEAD'], { allowFail: true });
+    if (head.code) throw new Error(`${repo} has no commits yet — make an initial commit (git add -A && git commit -m init), then retry`);
+    const names = (await git(repo, ['branch', '--format=%(refname:short)'], { allowFail: true })).out.split('\n').map((x) => x.trim()).filter(Boolean);
+    throw new Error(`base branch "${config.project.baseBranch}" not found. Branches in this repo: ${names.join(', ') || '(none)'} — set Base branch in Settings → General to one of them`);
+  }
   // keep crew scratch files out of every worktree's status
   const gitDir = (await git(repo, ['rev-parse', '--git-common-dir'])).out.trim();
   const exclude = path.resolve(repo, gitDir, 'info', 'exclude');
