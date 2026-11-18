@@ -145,6 +145,12 @@ function renderDm(n) {
 }
 
 const fmtDur = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`; };
+function streamBox(st) {
+  if (!st) return '';
+  const label = { waiting: 'waiting for the model…', thinking: 'thinking', writing: 'writing', tool: st.tool ? `calling ${st.tool.name}` : 'calling a tool', idle: 'running a tool / between requests' }[st.state] || st.state;
+  const body = st.state === 'tool' && st.tool ? `${st.tool.name}(${st.tool.args || ''})` : st.state === 'idle' ? '' : st.text;
+  return `<div class="strm ${st.state}"><div class="sh"><span class="sp-dot"></span><b>${esc(label)}</b><span class="mono muted">request ${st.requests}${st.tps && st.state !== 'idle' ? ' · ~' + st.tps + ' tok/s' : ''}</span></div>${body ? `<pre class="sp">${esc(body)}</pre>` : ''}</div>`;
+}
 function renderLive() {
   const list = [...S.act.values()];
   if (!list.length) return `<div class="empty"><b>Nothing running</b>When an agent is working you'll see its output, files and timing here, live.</div>`;
@@ -154,6 +160,7 @@ function renderLive() {
       <div class="lh">${avatar(a.worker, 24)}<div style="min-width:0;flex:1"><div class="nm">${esc(a.worker)}<span class="mono ref"> #${a.id}${a.attempt > 1 ? ' · try ' + a.attempt : ''}</span></div><div class="sub">${esc(a.title)}</div></div>
         <div class="ls"><span class="dot live"></span><span class="mono" data-since="${a.startedAt}"></span><span class="quiet mono" data-quiet="${a.lastOutputAt || 0}" data-start="${a.startedAt}"></span></div></div>
       ${files ? `<div class="chips" style="margin:8px 0 0">${files}</div>` : ''}
+      ${streamBox(a.stream)}
       <div class="code"><pre class="lp">${esc(a.lines.slice(-40).join('\n')) || '<span class="muted">waiting for output…</span>'}</pre></div>
     </div>`;
   }).join('');
@@ -165,7 +172,7 @@ function tickClocks() {
 }
 setInterval(tickClocks, 1000);
 let liveTimer = null;
-const refreshLive = () => { if (liveTimer) return; liveTimer = setTimeout(() => { liveTimer = null; renderRoster(); renderTabs(); if (S.tab === 'live') { renderChat(); } tickClocks(); }, 250); };
+const refreshLive = () => { if (liveTimer) return; liveTimer = setTimeout(() => { liveTimer = null; renderRoster(); renderTabs(); if (S.tab === 'live') { renderChat(); document.querySelectorAll('.sp').forEach((x) => (x.scrollTop = 1e9)); } tickClocks(); }, 250); };
 
 function renderChat() {
   const el = $('#chat'); const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
@@ -500,6 +507,7 @@ function onEvent(e) {
   switch (e.type) {
     case 'task': S.tasks.set(e.task.id, e.task); renderRoster(); renderBoard(); if (S.selected === e.task.id) { clearTimeout(detailTimer); detailTimer = setTimeout(loadDetail, 400); } break;
     case 'live': if (e.entry) S.act.set(e.id, e.entry); else S.act.delete(e.id); refreshLive(); break;
+    case 'live_stream': { const a = S.act.get(e.id); if (a) { a.stream = e.stream; a.lastOutputAt = Date.now(); refreshLive(); } break; }
     case 'task_files': { const a = S.act.get(e.id); if (a) { a.files = e.files; refreshLive(); } break; }
     case 'task_log': if (S.selected === e.id && S.detail && e.attempt === S.detail.attempts.length) { const L = $('#log'); if (L) { L.textContent += e.chunk; L.scrollTop = 1e9; } } liveAppend(e); break;
     case 'feed': if (e.feed === 'feed') { S.feeds.team.push(e.entry); bump('team'); renderTabs(); if (S.tab === 'team') renderChat(); } break;

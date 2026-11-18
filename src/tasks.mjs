@@ -15,6 +15,35 @@ const live = new Map();  // taskId -> live activity (what a running agent is doi
 const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07/g;
 const clean = (s) => s.replace(ANSI, '').replace(/\r(?!\n)/g, '\n');
 export const liveSnapshot = () => [...live.values()];
+
+/**
+ * Tracks what the model is producing right now for one agent, fed by the /llm-proxy route.
+ * state: waiting (request sent) → thinking | writing | tool → idle (the CLI is running a tool, between requests)
+ */
+export function streamTracker(workerName) {
+  const entry = [...live.values()].find((e) => e.worker === workerName);
+  if (!entry) return null;
+  const s = entry.stream ||= { state: 'idle', requests: 0, text: '', tool: null, tps: 0 };
+  let timer = null, chunks = 0, t0 = 0;
+  const push = () => { timer = null; entry.lastOutputAt = Date.now(); emit('live_stream', { id: entry.id, stream: s }); };
+  const poke = () => { if (!timer) timer = setTimeout(push, 200); };
+  const tail = (str, n) => (str.length > n ? str.slice(-n) : str);
+  return {
+    start() { s.requests++; s.state = 'waiting'; s.text = ''; s.tool = null; chunks = 0; t0 = Date.now(); poke(); },
+    delta({ reasoning, content, tool }) {
+      if (reasoning) { s.state = 'thinking'; s.text = tail(s.text + reasoning, 1800); chunks++; }
+      if (content) { s.state = 'writing'; s.text = tail(s.text + content, 1800); chunks++; }
+      if (tool) {
+        s.state = 'tool'; chunks++;
+        if (tool.name) s.tool = { name: tool.name, args: '' };
+        if (s.tool && tool.args) s.tool.args = tail(s.tool.args + tool.args, 600);
+      }
+      const secs = (Date.now() - t0) / 1000; s.tps = secs > 1 ? Math.round(chunks / secs) : s.tps;
+      poke();
+    },
+    end() { s.state = 'idle'; poke(); },
+  };
+}
 const starting = new Set();
 
 const say = (worker, text, extra = {}) => pushFeed('feed', { from: worker, kind: 'worker', text, ...extra });
@@ -120,7 +149,7 @@ async function runAttempt(t) {
   const env = { ...process.env, ...Object.fromEntries(Object.entries(q.env || {}).map(([k, v]) => [k, String(v)])), CREW_TASK_ID: String(t.id), CREW_WORKER: worker.name };
   // Crew's endpoint / key / model settings are authoritative (per-agent values fall back to the defaults)
   env.OPENAI_BASE_URL = eff.endpoint; env.OPENAI_MODEL = eff.model; env.OPENAI_API_KEY = eff.apiKey || 'local';
-  if (eff.provider) { // pinned OpenRouter providers: route through Crew, which adds the `provider` field the CLI cannot send
+  { // always go through Crew's proxy: it shows the model's live output and adds pinned OpenRouter `provider` routing the CLI cannot send
     env.OPENAI_BASE_URL = `http://127.0.0.1:${process.env.PORT || 4317}/llm-proxy/${encodeURIComponent(worker.name)}`;
     env.OPENAI_API_KEY = PROXY_TOKEN;
   }

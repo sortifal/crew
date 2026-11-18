@@ -12,7 +12,7 @@ const sh = (c, cwd = repo) => execSync(c, { cwd, stdio: 'pipe' }).toString();
 sh('git init -q -b main && git config user.email t@t && git config user.name t && echo hi > README.md && git add -A && git commit -qm init');
 
 // fake OpenAI-compatible server for DMs
-const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model}) (auth ${req.headers.authorization}) (provider ${JSON.stringify(j.provider)})` } }] })); }); });
+const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); if (j.stream) { res.setHeader('content-type', 'text/event-stream'); const ch = (d) => `data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`; res.write(ch({ reasoning_content: 'pondering-the-task ' })); setTimeout(() => { res.write(ch({ content: 'streamed-answer ' })); res.write(ch({ tool_calls: [{ index: 0, function: { name: 'write_file', arguments: '{"path":"a.txt"}' } }] })); res.end('data: [DONE]\n\n'); }, 300); return; } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model}) (auth ${req.headers.authorization}) (provider ${JSON.stringify(j.provider)})` } }] })); }); });
 await new Promise((r) => llm.listen(0, r));
 const llmPort = llm.address().port;
 
@@ -174,10 +174,10 @@ try {
   assert.match((await api('GET', '/api/dm/Theo')).at(-1).text, /Bearer sk-or-test/); ok('saving settings without retyping the key keeps it');
   const rt = await api('POST', '/api/tasks', { title: 'Remote job', brief: 'write file', assignee: 'Theo' });
   await waitFor(rt.id, 'review');
-  const rd = await api('GET', `/api/tasks/${rt.id}`); assert.match(rd.attempts[0].report, new RegExp(`model=vendor/model-x endpoint=${remoteEp.replace(/[/.]/g, '\\$&')} key=sk-or-test`)); ok('Qwen CLI gets the agent\'s endpoint, model and key via OPENAI_* env');
+  const rd = await api('GET', `/api/tasks/${rt.id}`); assert.match(rd.attempts[0].report, /model=vendor\/model-x endpoint=http:\/\/127\.0\.0\.1:\d+\/llm-proxy\/Theo key=(?!sk-or-test)/); ok('Qwen CLI gets the agent\'s model and the Crew proxy (not the real key)');
   await put((c) => { c.workers.find((w) => w.name === 'Theo').apiKey = 'env:CREW_TEST_KEY'; });
-  const rt2 = await api('POST', '/api/tasks', { title: 'Remote job 2', brief: 'write file', assignee: 'Theo' });
-  await waitFor(rt2.id, 'review'); assert.match((await api('GET', `/api/tasks/${rt2.id}`)).attempts[0].report, /key=from-env/); ok('env:NAME keys are resolved from the server environment');
+  const rt2 = await api('POST', '/api/tasks', { title: 'Remote job 2', brief: 'write file PROXYCALL', assignee: 'Theo' });
+  await waitFor(rt2.id, 'review'); assert.match((await api('GET', `/api/tasks/${rt2.id}`)).attempts[0].report, /auth Bearer from-env/); ok('env:NAME keys are resolved from the server environment');
   // pinned OpenRouter providers go through the Crew proxy
   await put((c) => { const th = c.workers.find((w) => w.name === 'Theo'); th.endpoint = remoteEp; th.apiKey = 'sk-or-test'; th.model = 'vendor/model-x'; th.providers = 'relace, fireworks'; th.quantization = 'fp4'; });
   await api('POST', '/api/dm/Theo', { text: 'routed' });
@@ -186,6 +186,11 @@ try {
   await waitFor(pt.id, 'review');
   const prep = (await api('GET', `/api/tasks/${pt.id}`)).attempts[0].report; assert.match(prep, /endpoint=http:\/\/127\.0\.0\.1:\d+\/llm-proxy\/Theo/); assert.ok(!/key=sk-or-test/.test(prep)); assert.ok(prep.includes('auth Bearer sk-or-test') && prep.includes('relace') && prep.includes('fireworks') && prep.includes('fp4') && prep.includes('allow_fallbacks')); ok('CLI is pointed at the Crew proxy, which forwards with the real key and provider routing');
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/llm-proxy/Theo/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body: '{}' })).status, 401); ok('proxy rejects callers without the token');
+  // live model output (thinking / writing / tool call) captured by the proxy
+  const ls = await api('POST', '/api/tasks', { title: 'Streaming', brief: 'STREAMLIVE', assignee: 'Mira' });
+  const strm = await until(async () => { const l = (await api('GET', '/api/state')).live.find((x) => x.id === ls.id); return l?.stream?.requests >= 1 && l.stream.text.includes('streamed-answer') && l.stream; }, 'live stream', 15000);
+  assert.equal(strm.tool.name, 'write_file'); assert.ok(strm.tool.args.includes('a.txt')); ok('live tab shows the model\'s streamed output and tool call');
+  await waitFor(ls.id, 'review');
   // one local + one remote agent run at the same time even though local parallelism is 1
   const sa = await api('POST', '/api/tasks', { title: 'Slow local', brief: 'SLOWLIVE', assignee: 'Mira' });
   const sb = await api('POST', '/api/tasks', { title: 'Slow remote', brief: 'SLOWLIVE', assignee: 'Theo' });

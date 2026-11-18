@@ -22,16 +22,39 @@ app.use('/llm-proxy/:agent', express.json({ limit: '100mb' }), async (req, res) 
   if (!w || req.headers.authorization !== `Bearer ${T.PROXY_TOKEN}`) return res.status(401).json({ error: 'unauthorized' });
   const s = workerSettings(w);
   const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : { ...(req.body || {}), ...(s.provider ? { provider: { ...(req.body?.provider || {}), ...s.provider } } : {}) };
+  const track = req.method === 'POST' && /\/chat\/completions$/.test(req.path) ? T.streamTracker(w.name) : null;
+  const ac = new AbortController(); res.on('close', () => ac.abort());
   try {
-    const up = await fetch(`${s.endpoint.replace(/\/$/, '')}${req.url.split('?')[0]}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`, {
-      method: req.method, body: body && JSON.stringify(body),
+    track?.start();
+    const up = await fetch(`${s.endpoint.replace(/\/$/, '')}${req.url}`, {
+      method: req.method, body: body && JSON.stringify(body), signal: ac.signal,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${s.apiKey || 'local'}` },
     });
     res.status(up.status); res.setHeader('content-type', up.headers.get('content-type') || 'application/json');
-    if (!up.body) return res.end();
-    Readable.fromWeb(up.body).on('error', () => res.end()).pipe(res);
-    res.on('close', () => up.body.cancel().catch(() => {}));
-  } catch (e) { res.status(502).json({ error: `proxy: ${e.message}` }); }
+    if (!up.body) { track?.end(); return res.end(); }
+    let carry = '', raw = '';
+    const feed = (line) => { // one SSE line: data: {chat.completion.chunk}
+      if (!line.startsWith('data:') || line.includes('[DONE]')) return;
+      let j; try { j = JSON.parse(line.slice(5)); } catch { return; }
+      const d = j.choices?.[0]?.delta; if (!d) return;
+      const tc = d.tool_calls?.[0]?.function;
+      track.delta({ reasoning: d.reasoning_content || d.reasoning, content: d.content, tool: tc ? { name: tc.name, args: tc.arguments } : null });
+    };
+    const stream = Readable.fromWeb(up.body);
+    stream.on('data', (c) => {
+      if (!track) return;
+      const txt = c.toString(); if (raw.length < 2e6) raw += txt;
+      const lines = (carry + txt).split('\n'); carry = lines.pop(); lines.forEach(feed);
+    });
+    stream.on('end', () => {
+      if (track && !/event-stream/.test(up.headers.get('content-type') || '')) { // non-streaming answer
+        try { const m = JSON.parse(raw).choices?.[0]?.message; track.delta({ reasoning: m?.reasoning_content, content: m?.content, tool: m?.tool_calls?.[0]?.function ? { name: m.tool_calls[0].function.name, args: m.tool_calls[0].function.arguments } : null }); } catch {}
+      }
+      track?.end();
+    });
+    stream.on('error', () => { track?.end(); res.end(); });
+    stream.pipe(res);
+  } catch (e) { track?.end(); if (!res.headersSent) res.status(502).json({ error: `proxy: ${e.message}` }); else res.end(); }
 });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(ROOT, 'public')));

@@ -2,6 +2,7 @@
 # Stand-in for `qwen` used by the test-suite. Reads .crew/BRIEF.md and behaves according to keywords.
 B=$(cat .crew/BRIEF.md)
 echo "[mock] $CREW_WORKER working on task $CREW_TASK_ID"
+if echo "$B" | grep -q STREAMLIVE; then curl -s -N -X POST "$OPENAI_BASE_URL/chat/completions" -H "authorization: Bearer $OPENAI_API_KEY" -H 'content-type: application/json' -d '{"model":"m","stream":true,"messages":[{"role":"system","content":"x"}]}' > /dev/null; sleep 5; fi
 if echo "$B" | grep -q SLOWLIVE; then printf '\033[32mstep one\033[0m\n'; echo early > early.txt; sleep 6; echo "step two"; fi
 if echo "$B" | grep -q ASKME && ! echo "$B" | grep -q "Answer to your question"; then
   echo "Should I use tabs or spaces?" > .crew/QUESTION.md; exit 0
