@@ -278,16 +278,19 @@ function panelGeneral() {
 
 function panelTeam() {
   const ws = SET.draft.workers;
-  const list = ws.map((w, i) => `<button class="ag ${i === SET.sel ? 'on' : ''}" data-ag="${i}">${avatar(w.name || '?', 22)}<span class="agn"><b>${esc(w.name || '(unnamed)')}</b><small>${esc(w.role)}</small></span>${w.enabled === false ? '<span class="badge">off</span>' : ''}</button>`).join('');
+  const list = ws.map((w, i) => `<button class="ag ${i === SET.sel ? 'on' : ''}" data-ag="${i}">${avatar(w.name || '?', 22)}<span class="agn"><b>${esc(w.name || '(unnamed)')}</b><small>${esc(w.role)}${/openrouter\.ai/i.test(w.endpoint || '') ? ' · OpenRouter' : w.endpoint ? ' · remote' : ''}</small></span>${w.enabled === false ? '<span class="badge">off</span>' : ''}</button>`).join('');
   const w = W();
+  const prov = !w ? 'default' : !w.endpoint ? 'default' : /(^|\.)openrouter\.ai(\/|$)/i.test(w.endpoint.replace(/^https?:\/\//, '')) ? 'openrouter' : 'custom';
   const form = !w ? '<div class="empty" style="margin:40px auto"><b>No agents</b>Add an agent to get started.</div>' : `
     <div class="row between" style="margin-bottom:6px"><h3 style="margin:0">${esc(w.name || 'New agent')}</h3>${sw(`workers.${SET.sel}.enabled`, 'Enabled')}</div>
     <div class="grid2">${fld('Name', inp(`workers.${SET.sel}.name`), 'Letters, digits, - and _. Renaming keeps its tasks, lessons and chats.')}${fld('Role', inp(`workers.${SET.sel}.role`, { ph: 'Backend developer' }))}</div>
     ${fld('Persona', area(`workers.${SET.sel}.persona`, 3, 'Calm, precise, a bit dry…'), 'Tone and character: shapes its messages, chats and briefs.')}
     ${fld('Standing instructions', area(`workers.${SET.sel}.instructions`, 4, 'e.g. “Prefer small commits. Always add a test for bug fixes.”'), 'Always included in this agent\'s task briefs.')}
     <div class="grp"><h4>Model <span class="muted" style="font-weight:400">— leave empty to use the defaults from “Local model”</span></h4>
-      <div class="grid2">${fld('Model', inp(`workers.${SET.sel}.model`, { list: 'modelList', ph: `default: ${SET.draft.qwen.model}` }))}${fld('Endpoint', inp(`workers.${SET.sel}.endpoint`, { ph: `default: ${SET.draft.qwen.endpoint}` }))}</div>
-      <div class="row"><button class="btn secondary sm" data-test="agent">Test endpoint</button><span class="help" id="test-agent"></span></div>
+      ${fld('Provider', `<select class="field" id="provSel"><option value="default"${prov === 'default' ? ' selected' : ''}>Default (local model)</option><option value="openrouter"${prov === 'openrouter' ? ' selected' : ''}>OpenRouter</option><option value="custom"${prov === 'custom' ? ' selected' : ''}>Other OpenAI-compatible API</option></select>`, prov === 'openrouter' ? 'Runs this agent on OpenRouter instead of your local model, so it does not use your GPU.' : '')}
+      <div class="grid2">${fld('Model', inp(`workers.${SET.sel}.model`, { list: 'modelList', ph: prov === 'openrouter' ? 'qwen/qwen3-coder' : `default: ${SET.draft.qwen.model}` }), prov === 'openrouter' ? 'An OpenRouter model id. Test the connection to list them. Pick one that supports tool calling.' : '')}${fld('Endpoint', inp(`workers.${SET.sel}.endpoint`, { ph: `default: ${SET.draft.qwen.endpoint}` }))}</div>
+      ${prov === 'default' ? '' : fld('API key', inp(`workers.${SET.sel}.apiKey`, { type: 'password', ph: w.hasKey ? 'saved — leave empty to keep it' : prov === 'openrouter' ? 'sk-or-v1-…  or  env:OPENROUTER_API_KEY' : 'empty = use the default key' }), `${w.hasKey ? '<a href="#" data-clearkey="1">Remove the saved key</a> · ' : ''}Stored in the config file on the server and never sent back to the browser. <code>env:NAME</code> reads it from an environment variable instead.`)}
+      <div class="row"><button class="btn secondary sm" data-test="agent">Test connection</button><span class="help" id="test-agent"></span></div>
     </div>
     <div class="grp"><h4>Limits <span class="muted" style="font-weight:400">— empty = defaults</span></h4>
       <div class="grid2">${fld('Timeout (minutes)', inp(`workers.${SET.sel}.timeoutMinutes`, { type: 'number', as: 'num', ph: `default: ${SET.draft.qwen.timeoutMinutes}` }))}${fld('Auto-retries', inp(`workers.${SET.sel}.autoRetries`, { type: 'number', as: 'num', ph: `default: ${SET.draft.scheduler.autoRetries}` }), 'Retries on failing checks before the Head is called.')}</div>
@@ -306,13 +309,14 @@ function panelModel() {
   <div class="grp"><h4>Agent CLI</h4>
     ${fld('Command', inp('qwen.command', { ph: 'qwen' }), 'Any CLI agent that takes a prompt works, e.g. <code>opencode</code>.')}
     ${fld('Arguments (one per line)', area('qwen.args', 3, '--yolo\n-p\n{prompt}', 'lines'), '<code>{prompt}</code> is replaced by a short pointer to the task brief.')}
-    <div class="fr"><label>Environment variables</label><div class="envs">${env.map(([k, v], i) => `<div class="envrow"><input class="field" data-ek="${i}" value="${esc(k)}" placeholder="NAME"><input class="field" data-ev="${i}" value="${esc(v)}" placeholder="value"><button class="close" data-erm="${i}" title="Remove">${ic('x')}</button></div>`).join('')}</div><button class="btn secondary sm" data-eadd="1">${ic('plus')}Add variable</button><div class="help">Passed to the CLI. <code>OPENAI_MODEL</code> / <code>OPENAI_BASE_URL</code> are overridden per agent when set there.</div></div>
+    <div class="fr"><label>Environment variables</label><div class="envs">${env.map(([k, v], i) => `<div class="envrow"><input class="field" data-ek="${i}" value="${esc(k)}" placeholder="NAME"><input class="field" data-ev="${i}" value="${esc(v)}" placeholder="value"><button class="close" data-erm="${i}" title="Remove">${ic('x')}</button></div>`).join('')}</div><button class="btn secondary sm" data-eadd="1">${ic('plus')}Add variable</button><div class="help">Passed to the CLI. <code>OPENAI_BASE_URL</code>, <code>OPENAI_API_KEY</code> and <code>OPENAI_MODEL</code> are set by Crew from the endpoint, key and model settings (per agent where overridden).</div></div>
   </div>`;
 }
 
 function panelWorkflow() {
   return `<h3>Workflow</h3>
-  <div class="grid2">${fld('Parallel runs', inp('scheduler.maxParallel', { type: 'number', as: 'num' }), 'Agents working at the same time. One GPU usually serves one run best.')}${fld('Auto-retries', inp('scheduler.autoRetries', { type: 'number', as: 'num' }), 'Default for agents: retries on failing checks before the Head is woken up.')}</div>
+  <div class="grid2">${fld('Parallel runs · local model', inp('scheduler.maxParallel', { type: 'number', as: 'num' }), 'Agents using the default local model at the same time. One GPU usually serves one run best.')}${fld('Parallel runs · other endpoints', inp('scheduler.maxParallelRemote', { type: 'number', as: 'num' }), 'Agents on OpenRouter or another API; they do not compete for your GPU.')}</div>
+  <div class="grid2">${fld('Auto-retries', inp('scheduler.autoRetries', { type: 'number', as: 'num' }), 'Default for agents: retries on failing checks before the Head is woken up.')}</div>
   <div class="grid2">${fld('Max attempts per task', inp('scheduler.maxAttempts', { type: 'number', as: 'num' }), 'Including rejections by the Head or you.')}${fld('Lessons injected (characters)', inp('lessons.maxChars', { type: 'number', as: 'num' }), 'Newest lessons are kept when the text is longer.')}</div>`;
 }
 
@@ -357,19 +361,27 @@ function wireSettings() {
   const add = root.querySelector('[data-add]'); if (add) add.onclick = () => {
     let n = SET.draft.workers.length + 1; const names = new Set(SET.draft.workers.map((w) => w.name.toLowerCase()));
     while (names.has('dev' + n)) n++;
-    SET.draft.workers.push({ name: 'Dev' + n, role: 'Developer', persona: '', enabled: true, model: '', endpoint: '', instructions: '', timeoutMinutes: null, autoRetries: null });
+    SET.draft.workers.push({ name: 'Dev' + n, role: 'Developer', persona: '', enabled: true, model: '', endpoint: '', apiKey: '', instructions: '', timeoutMinutes: null, autoRetries: null });
     SET.sel = SET.draft.workers.length - 1; markDirty(); renderSettings('Unsaved changes');
   };
   const rm = root.querySelector('[data-rm]'); if (rm) rm.onclick = () => {
     const w = W(); if (!confirm(`Remove ${w.name}? Its lessons are kept on disk; finished tasks keep its name.`)) return;
     SET.draft.workers.splice(SET.sel, 1); SET.sel = Math.max(0, SET.sel - 1); markDirty(); renderSettings('Unsaved changes');
   };
+  const ps = root.querySelector('#provSel'); if (ps) ps.onchange = () => {
+    const w = W();
+    if (ps.value === 'default') { w.endpoint = ''; }
+    else if (ps.value === 'openrouter') { w.endpoint = 'https://openrouter.ai/api/v1'; SET.models = []; }
+    else if (/openrouter\.ai/i.test(w.endpoint || '')) w.endpoint = '';
+    markDirty(); renderSettings('Unsaved changes');
+  };
+  const ck = root.querySelector('[data-clearkey]'); if (ck) ck.onclick = (e) => { e.preventDefault(); const w = W(); w.clearKey = true; w.hasKey = false; w.apiKey = ''; markDirty(); renderSettings('Unsaved changes'); };
   root.querySelectorAll('[data-test]').forEach((b) => (b.onclick = async () => {
     const isAgent = b.dataset.test === 'agent'; const out = $(isAgent ? '#test-agent' : '#test-global');
     const endpoint = (isAgent && W().endpoint) || SET.draft.qwen.endpoint; out.textContent = 'Testing…'; out.style.color = '';
     try {
-      const r = await api('POST', '/api/test-endpoint', { endpoint, apiKey: SET.draft.qwen.apiKey });
-      if (r.ok) { SET.models = r.models; out.textContent = `✔ reachable in ${r.ms} ms · ${r.models.length} model${r.models.length === 1 ? '' : 's'}${r.models.length ? ': ' + r.models.slice(0, 4).join(', ') + (r.models.length > 4 ? '…' : '') : ''}`; out.style.color = 'var(--green)'; const dl = $('#modelList'); if (dl) dl.innerHTML = r.models.map((m) => `<option>${esc(m)}</option>`).join(''); }
+      const r = await api('POST', '/api/test-endpoint', isAgent ? { endpoint, apiKey: W().apiKey, agent: W()._orig } : { endpoint, apiKey: SET.draft.qwen.apiKey });
+      if (r.ok) { SET.models = r.models; out.textContent = `✔ reachable in ${r.ms} ms · ${r.models.length} model${r.models.length === 1 ? '' : 's'}${r.models.length ? ': ' + r.models.slice(0, 3).join(', ') + (r.models.length > 3 ? '…' : '') : ''}${r.keyInfo ? ` · key${r.keyInfo.label ? ' “' + r.keyInfo.label + '”' : ''} ok${typeof r.keyInfo.usage === 'number' ? ', $' + r.keyInfo.usage.toFixed(2) + ' used' : ''}${typeof r.keyInfo.limit === 'number' ? ' of $' + r.keyInfo.limit : ''}` : ''}`; out.style.color = 'var(--green)'; const dl = $('#modelList'); if (dl) dl.innerHTML = r.models.map((m) => `<option>${esc(m)}</option>`).join(''); }
       else { out.textContent = '✖ ' + r.message; out.style.color = 'var(--red)'; }
     } catch (e) { out.textContent = '✖ ' + e.message; out.style.color = 'var(--red)'; }
   }));

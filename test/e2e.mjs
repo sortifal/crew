@@ -12,7 +12,7 @@ const sh = (c, cwd = repo) => execSync(c, { cwd, stdio: 'pipe' }).toString();
 sh('git init -q -b main && git config user.email t@t && git config user.name t && echo hi > README.md && git add -A && git commit -qm init');
 
 // fake OpenAI-compatible server for DMs
-const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model})` } }] })); }); });
+const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model}) (auth ${req.headers.authorization})` } }] })); }); });
 await new Promise((r) => llm.listen(0, r));
 const llmPort = llm.address().port;
 
@@ -33,7 +33,7 @@ dataDir: ${path.join(tmp, 'data')}
 `);
 
 const PORT = 4400 + Math.floor(Math.random() * 400);
-const env = { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), CREW_SANDBOX: '1', CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
+const env = { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), CREW_SANDBOX: '1', CREW_TEST_KEY: 'from-env', CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
 delete env.ANTHROPIC_API_KEY; delete env.CLAUDE_CODE_OAUTH_TOKEN;
 const srv = spawn('node', ['src/server.mjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let slog = ''; srv.stdout.on('data', (d) => (slog += d)); srv.stderr.on('data', (d) => (slog += d));
@@ -157,6 +157,34 @@ try {
   const act = await until(async () => (await api('GET', '/api/state')).live.find((x) => x.id === sl.id && x.lines.length && x.files.length), 'live entry with output and files', 15000);
   assert.equal(act.worker, 'Theo'); assert.ok(act.lines.some((l) => l === 'step one'), 'ANSI stripped'); assert.ok(act.files.some((f) => f.includes('early.txt'))); ok('running agent exposes live output and changed files');
   await waitFor(sl.id, 'review'); assert.equal((await api('GET', '/api/state')).live.length, 0); ok('live entry disappears when the agent finishes');
+
+  // R: OpenRouter-style remote agent (different endpoint + own API key)
+  const remoteEp = `http://localhost:${llmPort}/v1`; // differs from the default endpoint (127.0.0.1), so it counts as "remote"
+  const cfgNow = async () => (await api('GET', '/api/config')).config ?? (await api('GET', '/api/config'));
+  const put = async (mut) => { const c = await api('GET', '/api/config'); mut(c); return api('PUT', '/api/config', { config: c, renames: {} }); };
+  await put((c) => { const th = c.workers.find((w) => w.name === 'Theo'); th.endpoint = remoteEp; th.apiKey = 'sk-or-test'; th.model = 'vendor/model-x'; c.scheduler.maxParallel = 1; c.scheduler.maxParallelRemote = 3; });
+  const full = await api('GET', '/api/config'); const thFull = full.workers.find((w) => w.name === 'Theo');
+  assert.equal(thFull.apiKey, ''); assert.equal(thFull.hasKey, true);
+  assert.ok(!JSON.stringify(await api('GET', '/api/state')).includes('sk-or-test')); assert.ok(!JSON.stringify(full).includes('sk-or-test')); ok('per-agent API key is stored but never sent to the browser');
+  await api('POST', '/api/dm/Theo', { text: 'hi remote' });
+  const dmAuth = async (re) => until(async () => { const f = await api('GET', '/api/dm/Theo'); const l = f.at(-1); return l && l.role === 'Theo' && re.test(l.text) ? l.text : false; }, 'DM reply ' + re);
+  await dmAuth(/Bearer sk-or-test/); ok('chats with a remote agent use its own endpoint, model and key');
+  await put(() => {}); // the UI round-trips an empty key: it must keep the saved one
+  await api('POST', '/api/dm/Theo', { text: 'again' }); await until(async () => (await api('GET', '/api/dm/Theo')).filter((m) => m.role === 'Theo').length >= 2, 'second reply');
+  assert.match((await api('GET', '/api/dm/Theo')).at(-1).text, /Bearer sk-or-test/); ok('saving settings without retyping the key keeps it');
+  const rt = await api('POST', '/api/tasks', { title: 'Remote job', brief: 'write file', assignee: 'Theo' });
+  await waitFor(rt.id, 'review');
+  const rd = await api('GET', `/api/tasks/${rt.id}`); assert.match(rd.attempts[0].report, new RegExp(`model=vendor/model-x endpoint=${remoteEp.replace(/[/.]/g, '\\$&')} key=sk-or-test`)); ok('Qwen CLI gets the agent\'s endpoint, model and key via OPENAI_* env');
+  await put((c) => { c.workers.find((w) => w.name === 'Theo').apiKey = 'env:CREW_TEST_KEY'; });
+  const rt2 = await api('POST', '/api/tasks', { title: 'Remote job 2', brief: 'write file', assignee: 'Theo' });
+  await waitFor(rt2.id, 'review'); assert.match((await api('GET', `/api/tasks/${rt2.id}`)).attempts[0].report, /key=from-env/); ok('env:NAME keys are resolved from the server environment');
+  // one local + one remote agent run at the same time even though local parallelism is 1
+  const sa = await api('POST', '/api/tasks', { title: 'Slow local', brief: 'SLOWLIVE', assignee: 'Mira' });
+  const sb = await api('POST', '/api/tasks', { title: 'Slow remote', brief: 'SLOWLIVE', assignee: 'Theo' });
+  await until(async () => { const l = (await api('GET', '/api/state')).live; return l.some((x) => x.id === sa.id) && l.some((x) => x.id === sb.id); }, 'local and remote run together', 15000); ok('remote agents run in parallel with the local one (separate limits)');
+  await waitFor(sa.id, 'review'); await waitFor(sb.id, 'review');
+  await put((c) => { const th = c.workers.find((w) => w.name === 'Theo'); th.clearKey = true; th.endpoint = ''; th.model = ''; });
+  assert.equal((await api('GET', '/api/config')).workers.find((w) => w.name === 'Theo').hasKey, false); ok('saved key can be removed');
 
   console.log(`\nALL ${pass} CHECKS PASSED`);
 } catch (e) { console.error('\nFAILED:', e.message); process.exitCode = 1; }

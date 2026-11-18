@@ -16,4 +16,4 @@ if echo "$B" | grep -q "Feedback on your previous attempt"; then echo "FIXED" >>
 if echo "$B" | grep -q "passwordless"; then echo "SANDBOXNOTE" >> "$f"; fi
 if echo "$B" | grep -q "Do not delegate to sub-agents"; then echo "NOSUBAGENTS" >> "$f"; fi
 if echo "$B" | grep -q "Standing instructions"; then echo "STANDING" >> "$f"; fi
-echo "I wrote $f. model=$OPENAI_MODEL" > .crew/REPORT.md
+echo "I wrote $f. model=$OPENAI_MODEL endpoint=$OPENAI_BASE_URL key=$OPENAI_API_KEY" > .crew/REPORT.md

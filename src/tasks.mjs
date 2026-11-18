@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
-import { config, workerByName, workerSettings } from './config.mjs';
+import { config, workerByName, workerSettings, isRemote } from './config.mjs';
 import { allTasks, getTask, createTaskRecord, touch, pushFeed, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
 import { lessonsFor, addLesson } from './lessons.mjs';
@@ -115,8 +115,9 @@ async function runAttempt(t) {
   const eff = workerSettings(worker);
   const args = (q.args || []).map((a) => String(a).replace('{prompt}', prompt));
   const env = { ...process.env, ...Object.fromEntries(Object.entries(q.env || {}).map(([k, v]) => [k, String(v)])), CREW_TASK_ID: String(t.id), CREW_WORKER: worker.name };
-  if (worker.model) env.OPENAI_MODEL = worker.model;        // per-agent overrides
-  if (worker.endpoint) env.OPENAI_BASE_URL = worker.endpoint;
+  // Crew's endpoint / key / model settings are authoritative (per-agent values fall back to the defaults)
+  env.OPENAI_BASE_URL = eff.endpoint; env.OPENAI_MODEL = eff.model; env.OPENAI_API_KEY = eff.apiKey || 'local';
+  if (eff.keyMissing) log.write(`[crew] WARNING: ${worker.name}'s API key "${worker.apiKey}" is not set in the environment\n`);
 
   const exit = await new Promise((resolve) => {
     let child;
@@ -224,16 +225,21 @@ function runVerify(cmd, cwd) {
 /* ───────────── scheduler ───────────── */
 
 export function tick() {
-  const running = allTasks().filter((t) => t.status === 'running').length + starting.size;
-  let slots = config.scheduler.maxParallel - running;
-  if (slots <= 0) return;
-  const busy = new Set(allTasks().filter((t) => t.status === 'running').map((t) => t.assignee));
+  // Concurrency is limited per kind of endpoint: the default local model vs. everything else (OpenRouter, …)
+  const kind = (name) => (isRemote(workerByName(name)) ? 'remote' : 'local');
+  const cap = { local: config.scheduler.maxParallel, remote: config.scheduler.maxParallelRemote };
+  const used = { local: 0, remote: 0 };
+  const active = new Map(allTasks().filter((t) => t.status === 'running' || starting.has(t.id)).map((t) => [t.id, t]));
+  for (const t of active.values()) used[kind(t.assignee)]++;
+  const busy = new Set([...active.values()].map((t) => t.assignee));
   for (const t of allTasks().filter((x) => x.status === 'queued').sort((a, b) => a.id - b.id)) {
-    if (slots <= 0) break;
+    const k = kind(t.assignee);
+    if (used.local >= cap.local && used.remote >= cap.remote) break;
+    if (used[k] >= cap[k]) continue;
     if (!workerByName(t.assignee)?.enabled) continue; // disabled or removed: task waits
     if (busy.has(t.assignee) || starting.has(t.id)) continue;
     if (!t.dependsOn.every((d) => getTask(d)?.status === 'done')) continue;
-    slots--; busy.add(t.assignee); starting.add(t.id);
+    used[k]++; busy.add(t.assignee); starting.add(t.id);
     runAttempt(t)
       .catch((e) => {
         t.status = 'needs_attention';

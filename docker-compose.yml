@@ -10,6 +10,7 @@ services:
     environment:
       - CREW_UID=${CREW_UID:-1000}
       - CREW_GID=${CREW_GID:-1000}
+      - OPENROUTER_API_KEY                    # optional: agents can use `env:OPENROUTER_API_KEY` as their key
       - ANTHROPIC_API_KEY                     # for the Opus head …
       - CLAUDE_CODE_OAUTH_TOKEN               # … or a token from `claude setup-token`
     extra_hosts:

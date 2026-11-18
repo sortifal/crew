@@ -37,7 +37,7 @@ export async function dm(name, text) {
     const reply = (j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim() || '(no answer)';
     pushFeed(feedName(w.name), { role: w.name, text: reply }, 'dm');
   } catch (e) {
-    pushFeed(feedName(w.name), { role: 'error', text: `Can't reach the local model: ${e.message}` }, 'dm');
+    pushFeed(feedName(w.name), { role: 'error', text: `Can't reach the model (${(() => { try { return new URL(q.endpoint).host; } catch { return q.endpoint; } })()}): ${e.message}` }, 'dm');
   }
 }
 export const dmFeed = feedName;

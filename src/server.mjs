@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import { ROOT, CONFIG_PATH, config, loadConfig, saveConfigText, saveConfigObject, normalize, workerByName } from './config.mjs';
+import { ROOT, CONFIG_PATH, config, loadConfig, saveConfigText, saveConfigObject, normalize, workerByName, workerSettings, resolveKey } from './config.mjs';
 import { bus, allTasks, getTask, getFeed, pushFeed, clearFeed, renameFeed, persistTasks, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
 import * as T from './tasks.mjs';
@@ -19,8 +19,9 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(ROOT, 'public')));
 
 const h = (fn) => async (req, res) => { try { res.json((await fn(req)) ?? { ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } };
-const publicConfig = () => ({ project: config.project, head: config.head, workers: config.workers, scheduler: config.scheduler, qwen: { model: config.qwen.model, endpoint: config.qwen.endpoint } });
-const fullConfig = () => ({ project: config.project, head: config.head, workers: config.workers, qwen: config.qwen, scheduler: config.scheduler, lessons: config.lessons });
+const maskKeys = (ws) => ws.map((w) => ({ ...w, apiKey: '', hasKey: !!w.apiKey })); // per-agent API keys never leave the server
+const publicConfig = () => ({ project: config.project, head: config.head, workers: maskKeys(config.workers), scheduler: config.scheduler, qwen: { model: config.qwen.model, endpoint: config.qwen.endpoint } });
+const fullConfig = () => ({ project: config.project, head: config.head, workers: maskKeys(config.workers), qwen: config.qwen, scheduler: config.scheduler, lessons: config.lessons });
 
 app.get('/api/state', h(async () => ({
   config: publicConfig(), repoError, head: headState(), tasks: allTasks(),
@@ -82,6 +83,11 @@ app.get('/api/config', h(async () => fullConfig()));
 app.put('/api/config', h(async (r) => {
   const next = r.body.config; const renames = r.body.renames || {}; // { newName: oldName }
   if (!next) throw new Error('config missing');
+  for (const w of next.workers || []) { // keys are masked in the UI: empty = keep the saved one, clearKey = remove it
+    const prev = workerByName(renames[w.name] || w.name);
+    if (w.clearKey) w.apiKey = ''; else if (!String(w.apiKey || '').trim()) w.apiKey = prev?.apiKey || '';
+    delete w.clearKey; delete w.hasKey;
+  }
   normalize(JSON.parse(JSON.stringify(next))); // validate fully before touching anything
   const newNames = new Set(next.workers.map((w) => w.name.toLowerCase()));
   const kept = new Set(Object.values(renames).map((n) => n.toLowerCase()));
@@ -111,13 +117,24 @@ app.put('/api/config', h(async (r) => {
 }));
 app.post('/api/test-endpoint', h(async (r) => {
   const ep = String(r.body.endpoint || '').replace(/\/$/, ''); if (!/^https?:\/\//.test(ep)) throw new Error('endpoint must start with http:// or https://');
+  const agent = r.body.agent ? workerByName(r.body.agent) : null;
+  const key = resolveKey(r.body.apiKey) || (agent ? workerSettings(agent).apiKey : resolveKey(config.qwen.apiKey)) || 'local';
+  const auth = { authorization: `Bearer ${key}` };
   const t0 = Date.now();
   try {
-    const res = await fetch(`${ep}/models`, { headers: { authorization: `Bearer ${r.body.apiKey || config.qwen.apiKey || 'local'}` }, signal: AbortSignal.timeout(6000) });
+    const res = await fetch(`${ep}/models`, { headers: auth, signal: AbortSignal.timeout(8000) });
     if (!res.ok) return { ok: false, message: `HTTP ${res.status} from ${ep}/models` };
     const j = await res.json().catch(() => ({}));
     const models = (j.data || j.models || []).map((m) => m.id || m.name || m.model).filter(Boolean);
-    return { ok: true, ms: Date.now() - t0, models };
+    const out = { ok: true, ms: Date.now() - t0, models };
+    if (/(^|\.)openrouter\.ai$/i.test(new URL(ep).hostname)) { // /models is public, so validate the key separately
+      if (key === 'local') return { ...out, ok: false, message: 'OpenRouter is reachable, but no API key is set for this agent.' };
+      const k = await fetch(`${ep}/key`, { headers: auth, signal: AbortSignal.timeout(8000) }).catch(() => null);
+      if (k && (k.status === 401 || k.status === 403)) return { ...out, ok: false, message: 'OpenRouter rejected this API key.' };
+      const d = k?.ok ? (await k.json().catch(() => ({}))).data : null;
+      if (d) out.keyInfo = { label: d.label || '', usage: d.usage ?? null, limit: d.limit ?? null };
+    }
+    return out;
   } catch (e) { return { ok: false, message: `Cannot reach ${ep}: ${e.cause?.code || e.message}. From Docker, use host.docker.internal instead of localhost.` }; }
 }));
 

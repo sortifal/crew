@@ -37,6 +37,13 @@ The container is the sandbox: workers run as a user with **passwordless `sudo` i
 - Files agents create as root via `sudo` are handed back to your user after every attempt so commits and cleanup keep working.
 - Not a hard security boundary: the project folder is writable, and the container can reach your LAN and the model server. Cap resources by uncommenting `mem_limit` / `cpus` / `pids_limit` in `docker-compose.yml`. Existing installs: run `docker compose up -d --build` again (the compose file no longer pins `user:` or drops capabilities, because `sudo` needs them).
 
+### Offloading agents to OpenRouter
+Any agent can run on [OpenRouter](https://openrouter.ai) (or any OpenAI-compatible API) instead of your local model, so it doesn't use your GPU. In **Settings → Team**, pick the agent and set **Provider: OpenRouter**, then paste your API key, press **Test connection** (it validates the key and shows your usage) and choose a model id such as `qwen/qwen3-coder`. Choose a model that supports tool calling, since the agent CLI relies on it.
+- The key is stored in the config file on the server and is never sent back to the browser. Instead of pasting it, you can enter `env:OPENROUTER_API_KEY` and set that variable in `.env` (the compose file passes it through).
+- Mix freely: e.g. Mira on your local Qwen and Theo on OpenRouter. Their chats and their `qwen` CLI runs all use their own endpoint, model and key. Agents without overrides use **Settings → Local model**.
+- Concurrency is limited separately: **Parallel runs · local model** (default 1) and **Parallel runs · other endpoints** (default 3), so an OpenRouter agent works while the GPU is busy.
+- OpenRouter bills per token, and an agent can make a lot of calls. Set a spending limit on the key in your OpenRouter account. Crew does not track this cost.
+
 ## Quick start without Docker (NixOS / any Linux)
 
 ```bash
@@ -93,6 +100,6 @@ Light and dark themes (toggle in the sidebar; follows your system by default). T
 - The server binds to `127.0.0.1` and has **no authentication**; do not expose it. Workers run with `--yolo` (auto-approve) inside the task's worktree — they can still run arbitrary shell commands as your user, so use a repo/container you trust.
 - Qwen Code flags/env names change between releases; adjust `qwen.args` / `qwen.env` in the config if needed (`{prompt}` is replaced by a short pointer to `.crew/BRIEF.md`). Any CLI agent that takes a prompt works (e.g. `opencode run "{prompt}"`).
 - Every brief tells the agent not to use sub-agents: Qwen Code's own sub-agents are separate conversations, and on a single llama.cpp slot (`-np 1`) they evict each other's prompt cache, so each switch re-reads the whole prompt. If you do want them, run `llama-server` with `-np 2` (and `-c` doubled) and remove that line in `buildBrief`.
-- `maxParallel` defaults to 1 because one GPU serves one model well; raise it if your server batches requests.
+- `maxParallel` (default 1) applies to agents on the default local model, because one GPU serves one model well; `maxParallelRemote` (default 3) applies to agents on other endpoints. Raise the first only if your server batches requests (`-np`).
 - Merges are `--no-ff` into `baseBranch`; on a conflict the merge is aborted and you're told to send the task back for a rebase.
 - Not yet tested against a real Opus session or a real Qwen Code install (verified with a mock worker and a stub LLM server); expect to tune the Head's system prompt in `src/head.mjs` and the worker brief in `src/tasks.mjs` after a few real runs.
