@@ -19,7 +19,7 @@ const DEFAULTS = {
     model: 'qwen3-coder',
     timeoutMinutes: 30,
   },
-  scheduler: { maxParallel: 1, maxParallelRemote: 3, autoRetries: 1, maxAttempts: 4 },
+  scheduler: { maxParallel: 1, maxParallelRemote: 3, autoRetries: 1, maxAttempts: 4, maxRequests: 100, maxPromptTokens: 0 },
   lessons: { maxChars: 6000 },
   dataDir: '',
 };
@@ -77,6 +77,8 @@ export function normalize(raw) {
   c.qwen.timeoutMinutes = posNum(c.qwen.timeoutMinutes, 'local model timeout', { min: 1 });
   c.scheduler.maxParallel = posNum(c.scheduler.maxParallel, 'max parallel runs', { int: true, min: 1 });
   c.scheduler.maxParallelRemote = posNum(c.scheduler.maxParallelRemote, 'max parallel runs on other endpoints', { int: true, min: 1 });
+  c.scheduler.maxRequests = posNum(c.scheduler.maxRequests, 'max model requests per attempt', { int: true, min: 0 });
+  c.scheduler.maxPromptTokens = posNum(c.scheduler.maxPromptTokens, 'max prompt tokens per attempt', { int: true, min: 0 });
   c.scheduler.autoRetries = posNum(c.scheduler.autoRetries, 'auto-retries', { int: true, min: 0 });
   c.scheduler.maxAttempts = posNum(c.scheduler.maxAttempts, 'max attempts', { int: true, min: 1 });
   c.lessons.maxChars = posNum(c.lessons.maxChars, 'lessons size', { int: true, min: 500 });
@@ -148,7 +150,7 @@ export function saveConfigObject(obj) {
       return o;
     }),
     qwen: pick(obj.qwen || {}, ['command', 'args', 'env', 'endpoint', 'apiKey', 'model', 'timeoutMinutes']),
-    scheduler: pick(obj.scheduler || {}, ['maxParallel', 'maxParallelRemote', 'autoRetries', 'maxAttempts']),
+    scheduler: pick(obj.scheduler || {}, ['maxParallel', 'maxParallelRemote', 'autoRetries', 'maxAttempts', 'maxRequests', 'maxPromptTokens']),
     lessons: pick(obj.lessons || {}, ['maxChars']),
   };
   for (const k of SECTIONS) doc.set(k, doc.createNode(clean[k]));

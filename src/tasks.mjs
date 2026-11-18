@@ -47,7 +47,7 @@ export function streamTracker(workerName) {
       s.state = 'idle'; if (u) s.last = u;
       const tk = (entry.tokens ||= { requests: 0, input: 0, output: 0 });
       if (u) { tk.requests++; tk.input += u.input; tk.output += u.output; }
-      s.tokens = tk; poke();
+      s.tokens = tk; entry.check?.(); poke();
     },
     chunks: () => chunks, ms: () => Date.now() - t0,
   };
@@ -113,6 +113,7 @@ function buildBrief(t, worker) {
   if (lessons) parts.push(`## Lessons the team has learned (follow them)\n${lessons}`);
   parts.push(`## Rules
 - Keep changes minimal and focused on this task. Do not refactor unrelated code.
+- Read files in ranges (a few hundred lines at a time) and keep command output short (pipe through head/tail/grep). Huge outputs stay in your context for the rest of the task and make every later step slower.
 - Do the work yourself in this single conversation. Do not delegate to sub-agents or spawn parallel agents: the local model serves one conversation at a time, and extra ones make every step slower.
 - Do not run \`git commit\`, \`git push\`, or change branches; the system commits for you.
 - When finished, write a short first-person report to \`.crew/REPORT.md\` (3–6 lines: what you did, files touched, anything you are unsure about).
@@ -170,6 +171,14 @@ async function runAttempt(t) {
     procs.set(t.id, child);
     const entry = { id: t.id, worker: worker.name, title: t.title, attempt: attempt.n, startedAt: Date.now(), lastOutputAt: null, lines: [], files: [] };
     live.set(t.id, entry); emit('live', { id: t.id, entry });
+    // Guard rails: stop a run that keeps going (many model requests / prompt tokens), so one stuck task can't burn the budget
+    Object.defineProperty(entry, 'check', { enumerable: false, value: () => {
+      const sch = config.scheduler, tk = entry.tokens || { requests: 0, input: 0 };
+      const hit = sch.maxRequests && tk.requests >= sch.maxRequests ? `${sch.maxRequests} model requests` : sch.maxPromptTokens && tk.input >= sch.maxPromptTokens ? `${(sch.maxPromptTokens / 1e6).toFixed(1)}M prompt tokens` : '';
+      if (!hit || attempt.limit) return;
+      attempt.limit = hit; log.write(`\n[crew] stopped: this attempt reached its limit of ${hit}\n`);
+      child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 5000);
+    } });
     let buf = '', partial = '', timer = null;
     const flush = () => { timer = null; if (buf) { emit('task_log', { id: t.id, attempt: attempt.n, chunk: clean(buf) }); buf = ''; } };
     const onData = (d) => {
@@ -233,11 +242,11 @@ async function runAttempt(t) {
   }
 
   const why = exit.code !== 0
-    ? (attempt.timedOut ? `the worker timed out after ${eff.timeoutMinutes} min` : `the worker exited with code ${exit.code}`)
+    ? (attempt.limit ? `the worker was stopped at its limit of ${attempt.limit} (it was probably going in circles; consider splitting the task)` : attempt.timedOut ? `the worker timed out after ${eff.timeoutMinutes} min` : `the worker exited with code ${exit.code}`)
     : !changed ? 'no changes were made to the code'
     : `the check command failed (exit ${attempt.verify.code})`;
   const detail = attempt.verify && !verifyOk ? `\nOutput of \`${t.verify}\`:\n${tail(attempt.verify.output, 2500)}` : '';
-  const canRetry = t.autoRetried < eff.autoRetries && t.attempts.length < config.scheduler.maxAttempts;
+  const canRetry = !attempt.limit && t.autoRetried < eff.autoRetries && t.attempts.length < config.scheduler.maxAttempts;
   if (canRetry) {
     t.autoRetried++;
     t.feedback.push({ from: 'checks', text: `Your last attempt was not accepted: ${why}.${detail}`, attempt: attempt.n });

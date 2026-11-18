@@ -199,6 +199,12 @@ try {
   assert.ok(usg.totals.Mira.requests >= 1 && usg.totals.Mira.input >= 1234);
   assert.equal((await api('GET', `/api/tasks/${ls.id}`)).usage.input, 1234); ok('tokens add up per task and per agent');
   assert.ok(usg.recent.some((r) => r.kind === 'task' && r.estimated && r.who === 'Theo')); ok('without server counts the request is estimated and marked as such');
+  // run limit: an agent that keeps calling the model is stopped and escalated, not retried
+  await put((c) => { c.scheduler.maxRequests = 1; });
+  const lim = await api('POST', '/api/tasks', { title: 'Runaway', brief: 'STREAMLIVE', assignee: 'Mira' });
+  await waitFor(lim.id, 'needs_attention', 20000);
+  const ld = await api('GET', `/api/tasks/${lim.id}`); assert.match(ld.problem, /limit of 1 model requests/); assert.equal(ld.attempts.length, 1); ok('a run that reaches its request limit is stopped and escalated without retrying');
+  await put((c) => { c.scheduler.maxRequests = 100; });
   // one local + one remote agent run at the same time even though local parallelism is 1
   const sa = await api('POST', '/api/tasks', { title: 'Slow local', brief: 'SLOWLIVE', assignee: 'Mira' });
   const sb = await api('POST', '/api/tasks', { title: 'Slow remote', brief: 'SLOWLIVE', assignee: 'Theo' });

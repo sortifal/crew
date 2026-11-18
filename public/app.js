@@ -349,6 +349,7 @@ function panelWorkflow() {
   return `<h3>Workflow</h3>
   <div class="grid2">${fld('Parallel runs · local model', inp('scheduler.maxParallel', { type: 'number', as: 'num' }), 'Agents using the default local model at the same time. One GPU usually serves one run best.')}${fld('Parallel runs · other endpoints', inp('scheduler.maxParallelRemote', { type: 'number', as: 'num' }), 'Agents on OpenRouter or another API; they do not compete for your GPU.')}</div>
   <div class="grid2">${fld('Auto-retries', inp('scheduler.autoRetries', { type: 'number', as: 'num' }), 'Default for agents: retries on failing checks before the Head is woken up.')}</div>
+  <div class="grid2">${fld('Stop a run after (model requests)', inp('scheduler.maxRequests', { type: 'number', as: 'num' }), 'Safety net against agents going in circles. The task then goes to the Head instead of retrying. 0 = no limit.')}${fld('Stop a run after (prompt tokens)', inp('scheduler.maxPromptTokens', { type: 'number', as: 'num' }), 'Total prompt tokens of one attempt, counting cached ones. Useful with paid APIs. 0 = no limit.')}</div>
   <div class="grid2">${fld('Max attempts per task', inp('scheduler.maxAttempts', { type: 'number', as: 'num' }), 'Including rejections by the Head or you.')}${fld('Lessons injected (characters)', inp('lessons.maxChars', { type: 'number', as: 'num' }), 'Newest lessons are kept when the text is longer.')}</div>`;
 }
 

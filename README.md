@@ -89,6 +89,8 @@ A form-based **Settings** dialog (sidebar) replaces hand-editing YAML (still ava
 ## UI
 **Usage tab:** token counts for every model request: prompt tokens (and how many of them came from a cache), output tokens, tokens/s and duration, per agent and per task, plus the Head's cost and how full its context is. Agent numbers are the ones the server reports (llama.cpp and OpenRouter both do); if a server doesn't, the value is estimated and marked `~`. The Head's numbers come straight from the API, including prompt-cache reads.
 
+**Run limits.** An agent that keeps calling the model is stopped after **100 model requests** per attempt (Settings → Workflow; optionally also a prompt-token cap for paid APIs). The task then goes straight to the Head as “needs attention” instead of retrying, so it can be split or re-briefed. Briefs also tell agents to read files in ranges and keep command output short, since large tool results stay in their context for the rest of the task.
+
 **Keeping the Head cheap.** The Head re-reads its whole conversation on every turn, so Crew keeps that small and cacheable:
 - The system prompt never changes between turns, so Anthropic's prompt cache keeps working. The board is sent as a short `[board]` summary at the start of a message, only when it changed.
 - When the conversation grows past **Reset context above** (default 60k tokens, Settings → Project → Head), the Head restarts with the board and its last few messages. The chat shows a note when this happens.
