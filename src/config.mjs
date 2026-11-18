@@ -11,6 +11,8 @@ const DEFAULTS = {
   head: { model: 'opus', effort: 'medium', autoReview: true, maxContextTokens: 60000, wakeDelaySeconds: 8, instructions: '' },
   workers: [{ name: 'Dev', role: 'Developer', persona: '' }],
   qwen: {
+    runner: 'qwen',
+    contextWindow: 0,
     command: 'qwen',
     args: ['--yolo', '-p', '{prompt}'],
     env: {},
@@ -72,6 +74,9 @@ export function normalize(raw) {
   if (c.head.maxContextTokens && c.head.maxContextTokens < 10000) throw new Error('config: Head context limit must be 0 (never reset) or at least 10000 tokens');
   c.head.wakeDelaySeconds = posNum(c.head.wakeDelaySeconds, 'Head wake-up delay', { min: 0 });
   c.head.instructions = String(c.head.instructions || '');
+  c.qwen.runner = String(c.qwen.runner || 'qwen').trim().toLowerCase();
+  if (!['qwen', 'opencode'].includes(c.qwen.runner)) throw new Error('config: qwen.runner must be "qwen" (uses command/args below) or "opencode"');
+  c.qwen.contextWindow = posNum(c.qwen.contextWindow, 'context window', { int: true, min: 0 });
   if (!Array.isArray(c.qwen.args)) throw new Error('config: qwen.args must be a list');
   c.qwen.args = c.qwen.args.map(String);
   c.qwen.timeoutMinutes = posNum(c.qwen.timeoutMinutes, 'local model timeout', { min: 1 });
@@ -149,7 +154,7 @@ export function saveConfigObject(obj) {
       for (const k of ['timeoutMinutes', 'autoRetries']) if (w[k] !== null && w[k] !== undefined && w[k] !== '') o[k] = Number(w[k]);
       return o;
     }),
-    qwen: pick(obj.qwen || {}, ['command', 'args', 'env', 'endpoint', 'apiKey', 'model', 'timeoutMinutes']),
+    qwen: pick(obj.qwen || {}, ['runner', 'contextWindow', 'command', 'args', 'env', 'endpoint', 'apiKey', 'model', 'timeoutMinutes']),
     scheduler: pick(obj.scheduler || {}, ['maxParallel', 'maxParallelRemote', 'autoRetries', 'maxAttempts', 'maxRequests', 'maxPromptTokens']),
     lessons: pick(obj.lessons || {}, ['maxChars']),
   };

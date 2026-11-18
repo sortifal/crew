@@ -156,7 +156,9 @@ async function runAttempt(t) {
   const prompt = 'Read the file .crew/BRIEF.md in the current directory and carry out the task described there. Follow its rules exactly.';
   const q = config.qwen;
   const eff = workerSettings(worker);
-  const args = (q.args || []).map((a) => String(a).replace('{prompt}', prompt));
+  const opencode = q.runner === 'opencode';
+  const command = opencode ? 'opencode' : q.command;
+  const args = (opencode ? ['run', '{prompt}'] : q.args || []).map((a) => String(a).replace('{prompt}', prompt));
   const env = { ...process.env, ...Object.fromEntries(Object.entries(q.env || {}).map(([k, v]) => [k, String(v)])), CREW_TASK_ID: String(t.id), CREW_WORKER: worker.name };
   // Crew's endpoint / key / model settings are authoritative (per-agent values fall back to the defaults)
   env.OPENAI_BASE_URL = eff.endpoint; env.OPENAI_MODEL = eff.model; env.OPENAI_API_KEY = eff.apiKey || 'local';
@@ -164,11 +166,19 @@ async function runAttempt(t) {
     env.OPENAI_BASE_URL = `http://127.0.0.1:${process.env.PORT || 4317}/llm-proxy/${encodeURIComponent(worker.name)}`;
     env.OPENAI_API_KEY = PROXY_TOKEN;
   }
+  if (opencode) { // OpenCode ignores OPENAI_*: hand it an inline config pointing at Crew's proxy (which holds the real key)
+    env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+      $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', model: `crew/${eff.model}`,
+      provider: { crew: { npm: '@ai-sdk/openai-compatible', name: 'Crew', options: { baseURL: env.OPENAI_BASE_URL, apiKey: env.OPENAI_API_KEY },
+        models: { [eff.model]: { name: eff.model, ...(q.contextWindow ? { limit: { context: q.contextWindow, output: 8192 } } : {}) } } } },
+      permission: { '*': 'allow', question: 'deny' }, tools: { question: false }, // unattended: never wait for a human
+    });
+  }
   if (eff.keyMissing) log.write(`[crew] WARNING: ${worker.name}'s API key "${worker.apiKey}" is not set in the environment\n`);
 
   const exit = await new Promise((resolve) => {
     let child;
-    try { child = spawn(q.command, args, { cwd: wt, env, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    try { child = spawn(command, args, { cwd: wt, env, stdio: ['ignore', 'pipe', 'pipe'] }); }
     catch (e) { log.write(`spawn failed: ${e.message}\n`); return resolve({ code: 127 }); }
     procs.set(t.id, child);
     const entry = { id: t.id, worker: worker.name, title: t.title, attempt: attempt.n, startedAt: Date.now(), lastOutputAt: null, lines: [], files: [] };

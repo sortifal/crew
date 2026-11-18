@@ -33,7 +33,7 @@ dataDir: ${path.join(tmp, 'data')}
 `);
 
 const PORT = 4400 + Math.floor(Math.random() * 400);
-const env = { ...process.env, CREW_CONFIG: cfgPath, PORT: String(PORT), CREW_SANDBOX: '1', CREW_TEST_KEY: 'from-env', CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
+const env = { ...process.env, PATH: `${path.resolve('test/bin')}:${process.env.PATH}`, CREW_CONFIG: cfgPath, PORT: String(PORT), CREW_SANDBOX: '1', CREW_TEST_KEY: 'from-env', CLAUDE_BIN: path.resolve('examples/fake-claude.sh'), FAKE_STATE: path.join(tmp, 'fake-login') };
 delete env.ANTHROPIC_API_KEY; delete env.CLAUDE_CODE_OAUTH_TOKEN;
 const srv = spawn('node', ['src/server.mjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let slog = ''; srv.stdout.on('data', (d) => (slog += d)); srv.stderr.on('data', (d) => (slog += d));
@@ -211,6 +211,18 @@ try {
   assert.match((await api('GET', '/api/lessons/codebase')).text, /task #\d+\) API routes live in routes\.ts/); ok('"Notes for the team" from an approved task become shared codebase notes');
   const nb = await api('POST', '/api/tasks', { title: 'Uses notes', brief: 'write file CHECKBRIEF', assignee: 'Theo', dependsOn: [na.id] });
   await waitFor(nb.id, 'review'); const nr = (await api('GET', `/api/tasks/${nb.id}`)).attempts[0].report; assert.ok(nr.includes('HAS_NOTE') && nr.includes('HAS_UPSTREAM')); ok('later briefs carry the shared notes and the reports of the tasks they depend on');
+  // OpenCode as the agent CLI
+  await put((c) => { c.qwen.runner = 'opencode'; c.qwen.contextWindow = 50000; });
+  const oc = await api('POST', '/api/tasks', { title: 'Via opencode', brief: 'write file', assignee: 'Mira' });
+  await waitFor(oc.id, 'review');
+  const orep = (await api('GET', `/api/tasks/${oc.id}`)).attempts[0].report;
+  assert.match(orep, /^ARGS run Read the file \.crew\/BRIEF\.md/m);
+  const occ = JSON.parse(orep.match(/^OCCONFIG (.*)$/m)[1]);
+  assert.equal(occ.model, 'crew/fake'); assert.equal(occ.provider.crew.npm, '@ai-sdk/openai-compatible');
+  assert.match(occ.provider.crew.options.baseURL, /^http:\/\/127\.0\.0\.1:\d+\/llm-proxy\/Mira$/); assert.notEqual(occ.provider.crew.options.apiKey, 'local');
+  assert.equal(occ.provider.crew.models.fake.limit.context, 50000); assert.equal(occ.permission['*'], 'allow'); assert.equal(occ.permission.question, 'deny'); ok('OpenCode runs with a generated config that points at the Crew proxy');
+  await put((c) => { c.qwen.runner = 'qwen'; c.qwen.contextWindow = 0; });
+  await assert.rejects(put((c) => { c.qwen.runner = 'nope'; }), /runner/); ok('unknown agent CLI is rejected');
   // one local + one remote agent run at the same time even though local parallelism is 1
   const sa = await api('POST', '/api/tasks', { title: 'Slow local', brief: 'SLOWLIVE', assignee: 'Mira' });
   const sb = await api('POST', '/api/tasks', { title: 'Slow remote', brief: 'SLOWLIVE', assignee: 'Theo' });

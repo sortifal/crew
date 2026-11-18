@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in for `opencode` in the test-suite: behaves like the mock worker, then records the inline config it was given.
+"$(dirname "$0")/../../examples/mock-worker.sh" "$@"
+printf 'ARGS %s\nOCCONFIG %s\n' "$*" "$OPENCODE_CONFIG_CONTENT" >> .crew/REPORT.md

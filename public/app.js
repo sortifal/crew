@@ -339,8 +339,9 @@ function panelModel() {
   <div class="grid2">${fld('Default model', inp('qwen.model', { list: 'modelList', ph: 'qwen3-coder' }), 'Pick from the list after testing the connection.')}${fld('Timeout per run (minutes)', inp('qwen.timeoutMinutes', { type: 'number', as: 'num' }))}</div>
   <datalist id="modelList">${SET.models.map((m) => `<option>${esc(m)}</option>`).join('')}</datalist>
   <div class="grp"><h4>Agent CLI</h4>
-    ${fld('Command', inp('qwen.command', { ph: 'qwen' }), 'Any CLI agent that takes a prompt works, e.g. <code>opencode</code>.')}
-    ${fld('Arguments (one per line)', area('qwen.args', 3, '--yolo\n-p\n{prompt}', 'lines'), '<code>{prompt}</code> is replaced by a short pointer to the task brief.')}
+    ${fld('Agent CLI', `<select class="field" data-b="qwen.runner"><option value="qwen">Qwen Code (or any CLI, set below)</option><option value="opencode">OpenCode</option></select>`, SET.draft.qwen.runner === 'opencode' ? 'Runs <code>opencode run</code> in each worktree. Crew configures its provider and model itself, so the command and arguments are ignored. OpenCode must be installed where Crew runs.' : 'Any CLI agent that takes a prompt works.')}
+    ${SET.draft.qwen.runner === 'opencode' ? fld('Context window (tokens)', inp('qwen.contextWindow', { type: 'number', as: 'num', ph: '0 = let OpenCode decide' }), 'Tells OpenCode how large the model\'s window is, so it compacts before it fills up. Use what your server really allows, or lower to compact earlier.') : `${fld('Command', inp('qwen.command', { ph: 'qwen' }))}
+    ${fld('Arguments (one per line)', area('qwen.args', 3, '--yolo\n-p\n{prompt}', 'lines'), '<code>{prompt}</code> is replaced by a short pointer to the task brief.')}`}
     <div class="fr"><label>Environment variables</label><div class="envs">${env.map(([k, v], i) => `<div class="envrow"><input class="field" data-ek="${i}" value="${esc(k)}" placeholder="NAME"><input class="field" data-ev="${i}" value="${esc(v)}" placeholder="value"><button class="close" data-erm="${i}" title="Remove">${ic('x')}</button></div>`).join('')}</div><button class="btn secondary sm" data-eadd="1">${ic('plus')}Add variable</button><div class="help">Passed to the CLI. <code>OPENAI_BASE_URL</code>, <code>OPENAI_API_KEY</code> and <code>OPENAI_MODEL</code> are set by Crew from the endpoint, key and model settings (per agent where overridden).</div></div>
   </div>`;
 }
@@ -386,6 +387,7 @@ function wireSettings() {
       if (as === 'num') val = el.value === '' ? null : Number(el.value);
       if (as === 'lines') val = el.value.split('\n').map((x) => x.trim()).filter(Boolean);
       setP(SET.draft, path, val); markDirty();
+      if (path === 'qwen.runner') { renderSettings('Unsaved changes'); return; }
       if (/workers\.\d+\.(name|enabled|role)$/.test(path)) { const i = SET.sel; const it = root.querySelector(`[data-ag="${i}"]`); const w = SET.draft.workers[i]; if (it) { it.querySelector('b').textContent = w.name || '(unnamed)'; it.querySelector('small').textContent = w.role; it.querySelector('.avatar').outerHTML = avatar(w.name || '?', 22); let off = it.querySelector('.badge'); if (w.enabled === false && !off) it.insertAdjacentHTML('beforeend', '<span class="badge">off</span>'); if (w.enabled !== false && off) off.remove(); } const h3 = root.querySelector('.agf h3'); if (h3) h3.textContent = w.name || 'New agent'; }
     });
   });
