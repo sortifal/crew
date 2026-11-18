@@ -205,6 +205,12 @@ try {
   await waitFor(lim.id, 'needs_attention', 20000);
   const ld = await api('GET', `/api/tasks/${lim.id}`); assert.match(ld.problem, /limit of 1 model requests/); assert.equal(ld.attempts.length, 1); ok('a run that reaches its request limit is stopped and escalated without retrying');
   await put((c) => { c.scheduler.maxRequests = 100; });
+  // knowledge handoff between agents: upstream reports and shared codebase notes
+  const na = await api('POST', '/api/tasks', { title: 'Notes job', brief: 'write file NOTESJOB', assignee: 'Mira' });
+  await waitFor(na.id, 'review'); await api('POST', `/api/tasks/${na.id}/approve`, {});
+  assert.match((await api('GET', '/api/lessons/codebase')).text, /task #\d+\) API routes live in routes\.ts/); ok('"Notes for the team" from an approved task become shared codebase notes');
+  const nb = await api('POST', '/api/tasks', { title: 'Uses notes', brief: 'write file CHECKBRIEF', assignee: 'Theo', dependsOn: [na.id] });
+  await waitFor(nb.id, 'review'); const nr = (await api('GET', `/api/tasks/${nb.id}`)).attempts[0].report; assert.ok(nr.includes('HAS_NOTE') && nr.includes('HAS_UPSTREAM')); ok('later briefs carry the shared notes and the reports of the tasks they depend on');
   // one local + one remote agent run at the same time even though local parallelism is 1
   const sa = await api('POST', '/api/tasks', { title: 'Slow local', brief: 'SLOWLIVE', assignee: 'Mira' });
   const sb = await api('POST', '/api/tasks', { title: 'Slow remote', brief: 'SLOWLIVE', assignee: 'Theo' });

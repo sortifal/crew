@@ -18,4 +18,6 @@ if echo "$B" | grep -q "passwordless"; then echo "SANDBOXNOTE" >> "$f"; fi
 if echo "$B" | grep -q "Do not delegate to sub-agents"; then echo "NOSUBAGENTS" >> "$f"; fi
 if echo "$B" | grep -q "Standing instructions"; then echo "STANDING" >> "$f"; fi
 echo "I wrote $f. model=$OPENAI_MODEL endpoint=$OPENAI_BASE_URL key=$OPENAI_API_KEY" > .crew/REPORT.md
+if grep -q NOTESJOB .crew/BRIEF.md; then printf '\n## Notes for the team\n- API routes live in routes.ts\n' >> .crew/REPORT.md; fi
+if grep -q CHECKBRIEF .crew/BRIEF.md; then grep -q 'routes.ts' .crew/BRIEF.md && echo HAS_NOTE >> .crew/REPORT.md; grep -q 'Work from earlier tasks' .crew/BRIEF.md && echo HAS_UPSTREAM >> .crew/REPORT.md; fi
 if grep -q PROXYCALL .crew/BRIEF.md; then curl -s -X POST "$OPENAI_BASE_URL/chat/completions" -H "authorization: Bearer $OPENAI_API_KEY" -H "content-type: application/json" -d '{"model":"m","messages":[{"role":"system","content":"x"}]}' >> .crew/REPORT.md; fi

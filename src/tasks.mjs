@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { config, workerByName, workerSettings, isRemote } from './config.mjs';
 import { allTasks, getTask, createTaskRecord, touch, pushFeed, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
-import { lessonsFor, addLesson } from './lessons.mjs';
+import { lessonsFor, addLesson, addNotesFrom } from './lessons.mjs';
 
 export const hooks = { attention: null }; // set by head.mjs: (task, reason) => void
 const procs = new Map(); // taskId -> child
@@ -101,6 +101,8 @@ function buildBrief(t, worker) {
     `You work in your own git worktree (the current directory). Only change files inside it.`,
     `## What to do\n${t.brief}`,
   ];
+  const upstream = t.dependsOn.map((d) => getTask(d)).filter((u) => u?.attempts.at(-1)?.report);
+  if (upstream.length) parts.push('## Work from earlier tasks (already merged into your branch; build on it, do not redo it)\n' + upstream.map((u) => `### #${u.id} ${u.title} (${u.assignee})\n${u.attempts.at(-1).report.trim().slice(0, 1200)}`).join('\n\n'));
   if (config.project.context.trim()) parts.push(`## Project conventions\n${config.project.context.trim()}`);
   if (worker.instructions.trim()) parts.push(`## Standing instructions for you\n${worker.instructions.trim()}`);
   if (t.acceptance.length) parts.push('## Acceptance criteria\n' + t.acceptance.map((a) => `- ${a}`).join('\n'));
@@ -116,7 +118,7 @@ function buildBrief(t, worker) {
 - Read files in ranges (a few hundred lines at a time) and keep command output short (pipe through head/tail/grep). Huge outputs stay in your context for the rest of the task and make every later step slower.
 - Do the work yourself in this single conversation. Do not delegate to sub-agents or spawn parallel agents: the local model serves one conversation at a time, and extra ones make every step slower.
 - Do not run \`git commit\`, \`git push\`, or change branches; the system commits for you.
-- When finished, write a short first-person report to \`.crew/REPORT.md\` (3–6 lines: what you did, files touched, anything you are unsure about).
+- When finished, write a short first-person report to \`.crew/REPORT.md\` (3–6 lines: what you did, files touched, anything you are unsure about). Then add a section \`## Notes for the team\` with 1–3 short, durable facts about the codebase that would save a teammate time (where things live, how to run or test something, a gotcha). Leave it out if you learned nothing new.
 ${process.env.CREW_SANDBOX ? '- You are inside a disposable sandbox container with passwordless `sudo`: install whatever tools or packages you need (`sudo apt-get install -y …`, pip, npm, cargo…). Prefer project-local installs (venv, node_modules) so the work stays reproducible, add dependencies to the project\'s manifest, and name any system packages the project needs in your report. If apt reports a lock, wait a few seconds and retry. Keep all project changes inside this working directory.\n' : ''}- If you are blocked and need a decision, write ONE clear question to \`.crew/QUESTION.md\` and stop. Do not guess on important decisions.`);
   pending.forEach((f) => (f.used = true));
   answers.forEach((f) => (f.used = true));
@@ -318,6 +320,7 @@ export async function approveTask(id, { note = '', by = 'head', force = false } 
   const t = need(id);
   if (t.status !== 'review' && !(force && t.status === 'needs_attention')) throw new Error(`task #${id} is "${t.status}", only tasks in "review" can be approved`);
   await G.mergeTask(t, `Merge task #${t.id}: ${t.title}`);
+  addNotesFrom(t.attempts.at(-1)?.report, t.id);
   t.status = 'done';
   t.approvedBy = by;
   t.approvalNote = note;

@@ -89,6 +89,10 @@ A form-based **Settings** dialog (sidebar) replaces hand-editing YAML (still ava
 ## UI
 **Usage tab:** token counts for every model request: prompt tokens (and how many of them came from a cache), output tokens, tokens/s and duration, per agent and per task, plus the Head's cost and how full its context is. Agent numbers are the ones the server reports (llama.cpp and OpenRouter both do); if a server doesn't, the value is estimated and marked `~`. The Head's numbers come straight from the API, including prompt-cache reads.
 
+**Sharing knowledge between agents.** Agents don't share a live conversation (each run is its own context, which is also what keeps contexts small), but what one learns is handed on:
+- A task that `depends_on` others gets their final reports in its brief, so it builds on that work instead of re-exploring it.
+- Every report ends with a `## Notes for the team` section (where things live, how to run tests, gotchas). When a task is approved, those notes go into shared **codebase notes**, which are added to every future brief. You can read and edit them in the Lessons dialog under the scope `codebase`. Notes from rejected work are not kept.
+
 **Run limits.** An agent that keeps calling the model is stopped after **100 model requests** per attempt (Settings → Workflow; optionally also a prompt-token cap for paid APIs). The task then goes straight to the Head as “needs attention” instead of retrying, so it can be split or re-briefed. Briefs also tell agents to read files in ranges and keep command output short, since large tool results stay in their context for the rest of the task.
 
 **Keeping the Head cheap.** The Head re-reads its whole conversation on every turn, so Crew keeps that small and cacheable:
