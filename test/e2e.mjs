@@ -54,7 +54,7 @@ try {
   const det = await api('GET', `/api/tasks/${a.id}`);
   assert.match(det.diff.patch, /hello from Mira/); assert.match(det.attempts[0].report, /I wrote/); assert.equal(det.attempts[0].verify.code, 0); ok('diff, report and check result captured');
   assert.ok(!det.diff.patch.includes('.crew')); ok('.crew scratch files not committed');
-  assert.match(det.diff.patch, /SANDBOXNOTE/); ok('sandbox note (sudo/install allowed) is in the brief');
+  assert.match(det.diff.patch, /NOSUBAGENTS/); assert.match(det.diff.patch, /SANDBOXNOTE/); ok('sandbox note (sudo/install allowed) is in the brief');
   await api('POST', `/api/tasks/${a.id}/approve`, {}); await waitFor(a.id, 'done');
   assert.ok(fs.existsSync(path.join(repo, 'out_1.txt'))); assert.match(sh('git log --oneline'), /Merge task #1/); ok('approve merges into main');
   assert.ok(!fs.existsSync(path.join(tmp, 'data/worktrees/t1'))); ok('worktree cleaned up after merge');

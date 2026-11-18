@@ -73,6 +73,7 @@ function buildBrief(t, worker) {
   if (lessons) parts.push(`## Lessons the team has learned (follow them)\n${lessons}`);
   parts.push(`## Rules
 - Keep changes minimal and focused on this task. Do not refactor unrelated code.
+- Do the work yourself in this single conversation. Do not delegate to sub-agents or spawn parallel agents: the local model serves one conversation at a time, and extra ones make every step slower.
 - Do not run \`git commit\`, \`git push\`, or change branches; the system commits for you.
 - When finished, write a short first-person report to \`.crew/REPORT.md\` (3–6 lines: what you did, files touched, anything you are unsure about).
 ${process.env.CREW_SANDBOX ? '- You are inside a disposable sandbox container with passwordless `sudo`: install whatever tools or packages you need (`sudo apt-get install -y …`, pip, npm, cargo…). Prefer project-local installs (venv, node_modules) so the work stays reproducible, add dependencies to the project\'s manifest, and name any system packages the project needs in your report. If apt reports a lock, wait a few seconds and retry. Keep all project changes inside this working directory.\n' : ''}- If you are blocked and need a decision, write ONE clear question to \`.crew/QUESTION.md\` and stop. Do not guess on important decisions.`);

@@ -92,6 +92,7 @@ Light and dark themes (toggle in the sidebar; follows your system by default). T
 ## Notes & limits
 - The server binds to `127.0.0.1` and has **no authentication**; do not expose it. Workers run with `--yolo` (auto-approve) inside the task's worktree — they can still run arbitrary shell commands as your user, so use a repo/container you trust.
 - Qwen Code flags/env names change between releases; adjust `qwen.args` / `qwen.env` in the config if needed (`{prompt}` is replaced by a short pointer to `.crew/BRIEF.md`). Any CLI agent that takes a prompt works (e.g. `opencode run "{prompt}"`).
+- Every brief tells the agent not to use sub-agents: Qwen Code's own sub-agents are separate conversations, and on a single llama.cpp slot (`-np 1`) they evict each other's prompt cache, so each switch re-reads the whole prompt. If you do want them, run `llama-server` with `-np 2` (and `-c` doubled) and remove that line in `buildBrief`.
 - `maxParallel` defaults to 1 because one GPU serves one model well; raise it if your server batches requests.
 - Merges are `--no-ff` into `baseBranch`; on a conflict the merge is aborted and you're told to send the task back for a rebase.
 - Not yet tested against a real Opus session or a real Qwen Code install (verified with a mock worker and a stub LLM server); expect to tune the Head's system prompt in `src/head.mjs` and the worker brief in `src/tasks.mjs` after a few real runs.
