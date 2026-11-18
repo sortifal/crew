@@ -42,6 +42,7 @@ Any agent can run on [OpenRouter](https://openrouter.ai) (or any OpenAI-compatib
 - The key is stored in the config file on the server and is never sent back to the browser. Instead of pasting it, you can enter `env:OPENROUTER_API_KEY` and set that variable in `.env` (the compose file passes it through).
 - Mix freely: e.g. Mira on your local Qwen and Theo on OpenRouter. Their chats and their `qwen` CLI runs all use their own endpoint, model and key. Agents without overrides use **Settings → Local model**.
 - Concurrency is limited separately: **Parallel runs · local model** (default 1) and **Parallel runs · other endpoints** (default 3), so an OpenRouter agent works while the GPU is busy.
+- **Pinning the upstream provider:** for OpenRouter agents, set **Pin providers** (e.g. `relace`, or `relace, fireworks` in order of preference) and/or **Quantization** (e.g. `fp4`). By default other providers are not used if the pinned ones fail; tick the box to allow fallbacks. Crew adds the matching `provider` field to every request (chats directly, and CLI runs through a small built-in proxy at `/llm-proxy`, which only the CLI processes Crew starts can use).
 - OpenRouter bills per token, and an agent can make a lot of calls. Set a spending limit on the key in your OpenRouter account. Crew does not track this cost.
 
 ## Quick start without Docker (NixOS / any Linux)

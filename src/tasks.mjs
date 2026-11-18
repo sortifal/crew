@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import { config, workerByName, workerSettings, isRemote } from './config.mjs';
 import { allTasks, getTask, createTaskRecord, touch, pushFeed, emit, dataPath } from './store.mjs';
 import * as G from './git.mjs';
@@ -8,6 +9,8 @@ import { lessonsFor, addLesson } from './lessons.mjs';
 
 export const hooks = { attention: null }; // set by head.mjs: (task, reason) => void
 const procs = new Map(); // taskId -> child
+/** Shared secret between Crew and the CLI processes it starts, so only they can use the /llm-proxy route. */
+export const PROXY_TOKEN = crypto.randomBytes(24).toString('hex');
 const live = new Map();  // taskId -> live activity (what a running agent is doing right now)
 const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07]*\x07/g;
 const clean = (s) => s.replace(ANSI, '').replace(/\r(?!\n)/g, '\n');
@@ -117,6 +120,10 @@ async function runAttempt(t) {
   const env = { ...process.env, ...Object.fromEntries(Object.entries(q.env || {}).map(([k, v]) => [k, String(v)])), CREW_TASK_ID: String(t.id), CREW_WORKER: worker.name };
   // Crew's endpoint / key / model settings are authoritative (per-agent values fall back to the defaults)
   env.OPENAI_BASE_URL = eff.endpoint; env.OPENAI_MODEL = eff.model; env.OPENAI_API_KEY = eff.apiKey || 'local';
+  if (eff.provider) { // pinned OpenRouter providers: route through Crew, which adds the `provider` field the CLI cannot send
+    env.OPENAI_BASE_URL = `http://127.0.0.1:${process.env.PORT || 4317}/llm-proxy/${encodeURIComponent(worker.name)}`;
+    env.OPENAI_API_KEY = PROXY_TOKEN;
+  }
   if (eff.keyMissing) log.write(`[crew] WARNING: ${worker.name}'s API key "${worker.apiKey}" is not set in the environment\n`);
 
   const exit = await new Promise((resolve) => {

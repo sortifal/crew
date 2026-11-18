@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import path from 'node:path';
 import express from 'express';
 import { ROOT, CONFIG_PATH, config, loadConfig, saveConfigText, saveConfigObject, normalize, workerByName, workerSettings, resolveKey } from './config.mjs';
@@ -15,6 +16,23 @@ let repoError = '';
 try { await G.ensureRepo(); } catch (e) { repoError = e.message; console.warn('⚠ ', e.message, '\n  Fix it in Settings or crew.config.yaml.'); }
 
 const app = express();
+// Pass-through to an agent's endpoint that adds its pinned OpenRouter `provider` routing to every request body
+app.use('/llm-proxy/:agent', express.json({ limit: '100mb' }), async (req, res) => {
+  const w = workerByName(decodeURIComponent(req.params.agent));
+  if (!w || req.headers.authorization !== `Bearer ${T.PROXY_TOKEN}`) return res.status(401).json({ error: 'unauthorized' });
+  const s = workerSettings(w);
+  const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : { ...(req.body || {}), ...(s.provider ? { provider: { ...(req.body?.provider || {}), ...s.provider } } : {}) };
+  try {
+    const up = await fetch(`${s.endpoint.replace(/\/$/, '')}${req.url.split('?')[0]}${req.url.includes('?') ? '?' + req.url.split('?')[1] : ''}`, {
+      method: req.method, body: body && JSON.stringify(body),
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${s.apiKey || 'local'}` },
+    });
+    res.status(up.status); res.setHeader('content-type', up.headers.get('content-type') || 'application/json');
+    if (!up.body) return res.end();
+    Readable.fromWeb(up.body).on('error', () => res.end()).pipe(res);
+    res.on('close', () => up.body.cancel().catch(() => {}));
+  } catch (e) { res.status(502).json({ error: `proxy: ${e.message}` }); }
+});
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(ROOT, 'public')));
 

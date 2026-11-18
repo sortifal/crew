@@ -29,7 +29,7 @@ export async function dm(name, text) {
     const res = await fetch(`${q.endpoint.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${q.apiKey || 'local'}` },
-      body: JSON.stringify({ model: q.model, temperature: 0.7, max_tokens: 400, messages: [{ role: 'system', content: system(w) }, ...history] }),
+      body: JSON.stringify({ ...(q.provider ? { provider: q.provider } : {}), model: q.model, temperature: 0.7, max_tokens: 400, messages: [{ role: 'system', content: system(w) }, ...history] }),
       signal: AbortSignal.timeout(120000),
     });
     if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);

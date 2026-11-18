@@ -17,3 +17,4 @@ if echo "$B" | grep -q "passwordless"; then echo "SANDBOXNOTE" >> "$f"; fi
 if echo "$B" | grep -q "Do not delegate to sub-agents"; then echo "NOSUBAGENTS" >> "$f"; fi
 if echo "$B" | grep -q "Standing instructions"; then echo "STANDING" >> "$f"; fi
 echo "I wrote $f. model=$OPENAI_MODEL endpoint=$OPENAI_BASE_URL key=$OPENAI_API_KEY" > .crew/REPORT.md
+if grep -q PROXYCALL .crew/BRIEF.md; then curl -s -X POST "$OPENAI_BASE_URL/chat/completions" -H "authorization: Bearer $OPENAI_API_KEY" -H "content-type: application/json" -d '{"model":"m","messages":[{"role":"system","content":"x"}]}' >> .crew/REPORT.md; fi

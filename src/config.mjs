@@ -53,6 +53,9 @@ export function normalize(raw) {
     w.model = String(w.model || '').trim();
     w.endpoint = String(w.endpoint || '').trim();
     w.apiKey = String(w.apiKey || '').trim();
+    w.providers = String(w.providers || '').trim();          // OpenRouter upstream providers, e.g. "relace, fireworks"
+    w.quantization = String(w.quantization || '').trim();    // e.g. "fp4"
+    w.allowFallbacks = w.allowFallbacks === true || w.allowFallbacks === 'true';
     w.instructions = String(w.instructions || '');
     w.timeoutMinutes = posNum(w.timeoutMinutes, `${w.name}: timeout`, { min: 1, allowEmpty: true });
     w.autoRetries = posNum(w.autoRetries, `${w.name}: auto-retries`, { int: true, min: 0, allowEmpty: true });
@@ -97,6 +100,16 @@ export const resolveKey = (v) => { const m = String(v || '').match(/^env:(\w+)$/
 const normEndpoint = (e) => String(e || '').trim().replace(/\/+$/, '').toLowerCase();
 /** True when this agent talks to a different endpoint than the default local model (e.g. OpenRouter). */
 export const isRemote = (w) => !!w && !!w.endpoint && normEndpoint(w.endpoint) !== normEndpoint(config.qwen.endpoint);
+/** OpenRouter `provider` routing object for this agent, or null when nothing is pinned. */
+export function routingFor(w) {
+  const list = (s) => String(s || '').split(/[,\s]+/).filter(Boolean);
+  const order = list(w.providers), quant = list(w.quantization);
+  if (!order.length && !quant.length) return null;
+  const p = {};
+  if (order.length) { p.order = order; p.allow_fallbacks = !!w.allowFallbacks; }
+  if (quant.length) p.quantizations = quant;
+  return p;
+}
 export function workerSettings(w) {
   const q = config.qwen;
   const ownKey = w.apiKey ? resolveKey(w.apiKey) : '';
@@ -106,6 +119,7 @@ export function workerSettings(w) {
     apiKey: ownKey || (w.apiKey ? '' : resolveKey(q.apiKey)),
     keyMissing: !!w.apiKey && !ownKey,
     remote: isRemote(w),
+    provider: routingFor(w),
     timeoutMinutes: w.timeoutMinutes || q.timeoutMinutes,
     autoRetries: w.autoRetries ?? config.scheduler.autoRetries,
   };
@@ -123,7 +137,8 @@ export function saveConfigObject(obj) {
     workers: (obj.workers || []).map((w) => {
       const o = pick(w, ['name', 'role', 'persona']);
       if (w.enabled === false) o.enabled = false;
-      for (const k of ['model', 'endpoint', 'apiKey', 'instructions']) if (String(w[k] || '').trim()) o[k] = String(w[k]).trim();
+      for (const k of ['model', 'endpoint', 'apiKey', 'providers', 'quantization', 'instructions']) if (String(w[k] || '').trim()) o[k] = String(w[k]).trim();
+      if (w.allowFallbacks) o.allowFallbacks = true;
       for (const k of ['timeoutMinutes', 'autoRetries']) if (w[k] !== null && w[k] !== undefined && w[k] !== '') o[k] = Number(w[k]);
       return o;
     }),
