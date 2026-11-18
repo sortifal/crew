@@ -12,7 +12,7 @@ const sh = (c, cwd = repo) => execSync(c, { cwd, stdio: 'pipe' }).toString();
 sh('git init -q -b main && git config user.email t@t && git config user.name t && echo hi > README.md && git add -A && git commit -qm init');
 
 // fake OpenAI-compatible server for DMs
-const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); if (j.stream) { res.setHeader('content-type', 'text/event-stream'); const ch = (d) => `data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`; res.write(ch({ reasoning_content: 'pondering-the-task ' })); setTimeout(() => { res.write(ch({ content: 'streamed-answer ' })); res.write(ch({ tool_calls: [{ index: 0, function: { name: 'write_file', arguments: '{"path":"a.txt"}' } }] })); res.end('data: [DONE]\n\n'); }, 300); return; } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model}) (auth ${req.headers.authorization}) (provider ${JSON.stringify(j.provider)})` } }] })); }); });
+const llm = http.createServer((req, res) => { if (req.method === 'GET') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ data: [{ id: 'fake-a' }, { id: 'fake-b' }] })); } let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { const j = JSON.parse(b); if (j.stream) { res.setHeader('content-type', 'text/event-stream'); const ch = (d) => `data: ${JSON.stringify({ choices: [{ delta: d }] })}\n\n`; res.write(ch({ reasoning_content: 'pondering-the-task ' })); setTimeout(() => { res.write(ch({ content: 'streamed-answer ' })); res.write(ch({ tool_calls: [{ index: 0, function: { name: 'write_file', arguments: '{"path":"a.txt"}' } }] })); if (j.stream_options?.include_usage) res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 1234, completion_tokens: 56, prompt_tokens_details: { cached_tokens: 1000 } } })}\n\n`); res.end('data: [DONE]\n\n'); }, 300); return; } res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: `<think>x</think>Sure. (sys has lesson: ${j.messages[0].content.includes('mock-lesson-marker')}) (model ${j.model}) (auth ${req.headers.authorization}) (provider ${JSON.stringify(j.provider)})` } }], ...(j.model === 'm' ? {} : { usage: { prompt_tokens: 10, completion_tokens: 5 } }) })); }); });
 await new Promise((r) => llm.listen(0, r));
 const llmPort = llm.address().port;
 
@@ -191,6 +191,14 @@ try {
   const strm = await until(async () => { const l = (await api('GET', '/api/state')).live.find((x) => x.id === ls.id); return l?.stream?.requests >= 1 && l.stream.text.includes('streamed-answer') && l.stream; }, 'live stream', 15000);
   assert.equal(strm.tool.name, 'write_file'); assert.ok(strm.tool.args.includes('a.txt')); ok('live tab shows the model\'s streamed output and tool call');
   await waitFor(ls.id, 'review');
+  // token accounting
+  const usg = await api('GET', '/api/usage');
+  const sr = usg.recent.find((r) => r.kind === 'task' && r.taskId === ls.id);
+  assert.ok(sr && sr.who === 'Mira' && sr.input === 1234 && sr.cached === 1000 && sr.output === 56 && !sr.estimated); ok('proxy asks for and records the server\'s token counts per request (incl. cached prompt)');
+  assert.ok(usg.recent.some((r) => r.kind === 'chat' && r.who === 'Theo' && r.input === 10 && r.output === 5)); ok('chat replies are counted too');
+  assert.ok(usg.totals.Mira.requests >= 1 && usg.totals.Mira.input >= 1234);
+  assert.equal((await api('GET', `/api/tasks/${ls.id}`)).usage.input, 1234); ok('tokens add up per task and per agent');
+  assert.ok(usg.recent.some((r) => r.kind === 'task' && r.estimated && r.who === 'Theo')); ok('without server counts the request is estimated and marked as such');
   // one local + one remote agent run at the same time even though local parallelism is 1
   const sa = await api('POST', '/api/tasks', { title: 'Slow local', brief: 'SLOWLIVE', assignee: 'Mira' });
   const sb = await api('POST', '/api/tasks', { title: 'Slow remote', brief: 'SLOWLIVE', assignee: 'Theo' });

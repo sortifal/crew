@@ -1,3 +1,4 @@
+import { record as recordUsage } from './usage.mjs';
 import { config, workerByName, workerSettings } from './config.mjs';
 import { allTasks, pushFeed, getFeed } from './store.mjs';
 import { lessonsFor } from './lessons.mjs';
@@ -25,6 +26,7 @@ export async function dm(name, text) {
   pushFeed(feedName(w.name), { role: 'user', text }, 'dm');
   const history = getFeed(feedName(w.name), 20).filter((m) => m.role !== 'error').map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
   const q = workerSettings(w);
+  const t0 = Date.now();
   try {
     const res = await fetch(`${q.endpoint.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
@@ -34,6 +36,7 @@ export async function dm(name, text) {
     });
     if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
     const j = await res.json();
+    if (j.usage) recordUsage({ who: w.name, kind: 'chat', model: q.model, input: j.usage.prompt_tokens || 0, output: j.usage.completion_tokens || 0, cached: j.usage.prompt_tokens_details?.cached_tokens || 0, ms: Date.now() - t0 });
     const reply = (j.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim() || '(no answer)';
     pushFeed(feedName(w.name), { role: w.name, text: reply }, 'dm');
   } catch (e) {

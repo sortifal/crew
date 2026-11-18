@@ -1,7 +1,9 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { config, workerByName } from './config.mjs';
-import { allTasks, getTask, pushFeed, emit, load, save } from './store.mjs';
+import { allTasks, getTask, getFeed, pushFeed, emit, load, save } from './store.mjs';
+import { record as recordUsage, addCost } from './usage.mjs';
 import * as T from './tasks.mjs';
 import { addLesson, validScope } from './lessons.mjs';
 import { diffOf } from './git.mjs';
@@ -11,7 +13,7 @@ let busy = false;
 let abort = null;
 let queue = Promise.resolve();
 let session = load('head-session.json', { id: null, costUsd: 0 });
-export const headState = () => ({ busy, costUsd: session.costUsd, hasSession: !!session.id });
+export const headState = () => ({ busy, costUsd: session.costUsd, hasSession: !!session.id, context: session.id ? session.context || 0 : 0, maxContext: config.head.maxContextTokens });
 
 const ok = (text) => ({ content: [{ type: 'text', text: typeof text === 'string' ? text : JSON.stringify(text, null, 2) }] });
 const fail = (e) => ({ content: [{ type: 'text', text: `Error: ${e.message || e}` }], isError: true });
@@ -27,13 +29,17 @@ function buildTools() {
     tool('list_tasks', 'List tasks on the board, optionally filtered by status (queued, running, blocked, review, needs_attention, done, cancelled).',
       { status: z.string().optional() },
       wrap(async ({ status }) => allTasks().filter((t) => !status || t.status === status).map(summary)), { annotations: { readOnlyHint: true } }),
-    tool('get_task', 'Full detail of one task: brief, attempts, worker report, check output, and optionally the diff against the base branch.',
+    tool('get_task', 'Detail of one task: brief, latest attempts, worker report, check output, and optionally the diff (capped at ~14k characters; the stat shows what was cut). Only ask for the diff when you are about to decide.',
       { id: z.number(), include_diff: z.boolean().optional(), include_log_tail: z.boolean().optional() },
       wrap(async ({ id, include_diff, include_log_tail }) => {
         const t = getTask(id); if (!t) throw new Error(`no task #${id}`);
-        const out = { ...summary(t), brief: t.brief, acceptance: t.acceptance, verify: t.verify, feedbackHistory: t.feedback, attempts: t.attempts.map((a) => ({ n: a.n, exit: a.exit, report: a.report, verify: a.verify && { code: a.verify.code, output: a.verify.output.slice(-1500) } })) };
-        if (include_diff && t.branch) { const d = await diffOf(t, { maxChars: 30000 }); out.diffStat = d.stat; out.diff = d.patch + (d.truncated ? '\n…(truncated)' : ''); }
-        if (include_log_tail) out.logTail = T.readLog(t, t.attempts.length, 3000);
+        // Everything returned here stays in the conversation, so keep it lean: full detail for the latest attempt only
+        const cut = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s);
+        const lastN = t.attempts.length;
+        const out = { ...summary(t), brief: t.brief, acceptance: t.acceptance, verify: t.verify, feedbackHistory: t.feedback.slice(-3).map((f) => ({ ...f, text: cut(f.text, 800) })), attempts: t.attempts.slice(-3).map((a) => ({ n: a.n, exit: a.exit, report: cut(a.report, a.n === lastN ? 3000 : 400), verify: a.verify && { code: a.verify.code, output: a.verify.output.slice(a.n === lastN ? -1500 : -300) } })) };
+        if (t.feedback.length > 3 || lastN > 3) out.note = 'older feedback/attempts omitted';
+        if (include_diff && t.branch) { const d = await diffOf(t, { maxChars: 14000 }); out.diffStat = d.stat; out.diff = d.patch + (d.truncated ? '\n…(truncated)' : ''); }
+        if (include_log_tail) out.logTail = T.readLog(t, t.attempts.length, 2000);
         return out;
       }), { annotations: { readOnlyHint: true } }),
     tool('approve_task', 'Approve a task in "review": merges its branch into the base branch.',
@@ -58,7 +64,6 @@ function buildTools() {
 
 function buildSystem() {
   const workers = config.workers.map((w) => `- ${w.name} — ${w.role}${w.persona ? ` (${w.persona})` : ''}${w.enabled ? '' : ' [DISABLED – do not assign]'}`).join('\n');
-  const board = allTasks().filter((t) => !['done', 'cancelled'].includes(t.status)).map((t) => `#${t.id} [${t.status}] ${t.title} → ${t.assignee}`).join('\n') || '(empty)';
   return `You are Head, the project lead of "${config.project.name}". You talk with the user (the owner) and run a small team of developers.
 
 ## Your team
@@ -73,9 +78,9 @@ The developers run on a smaller local model. They are capable but literal, can d
 - Coaching: when a rejection or a stuck task shows a mistake that will likely repeat, record it with add_lesson (scope = the developer's name for personal habits, "project" for conventions and gotchas). Lessons are one short imperative sentence, concrete ("When adding an endpoint, also register it in routes.ts"). No trivia, no duplicates.
 - Messages starting with [system] are automatic notifications about the board, not the user. Handle them (review, answer, re-plan), then briefly tell the user what you did.
 - Talk to the user concisely and plainly. Say what is happening and what you need from them, if anything.
+- Be economical: every message and tool result stays in your context. Each message starts with a [board] summary when the board changed, so do not call list_tasks to see it. Ask for diffs only when you are about to decide. After a [system] notification, act and then answer in one or two sentences. Never restate briefs, diffs or reports you already saw.
 
-${config.project.context.trim() ? `## Project conventions (from the owner)\n${config.project.context.trim()}\n\n` : ''}${config.head.instructions.trim() ? `## Extra instructions from the owner\n${config.head.instructions.trim()}\n\n` : ''}## Board right now
-${board}`;
+${config.project.context.trim() ? `## Project conventions (from the owner)\n${config.project.context.trim()}\n\n` : ''}${config.head.instructions.trim() ? `## Extra instructions from the owner\n${config.head.instructions.trim()}\n` : ''}`;
 }
 
 export function sendToHead(text, from = 'user') {
@@ -87,9 +92,37 @@ export function stopHead() { abort?.abort(); }
 
 export function resetHead() {
   stopHead();
-  session = { id: null, costUsd: session.costUsd };
+  session = { id: null, costUsd: session.costUsd, context: 0 };
   save('head-session.json', session);
   emit('head_state', headState());
+}
+
+const fmtK = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+/** The board, kept out of the system prompt so that prompt (and the prompt cache behind it) stays identical between turns. */
+function boardDigest() {
+  const open = allTasks().filter((t) => !['done', 'cancelled'].includes(t.status));
+  const done = allTasks().length - open.length;
+  const lines = open.slice(0, 30).map((t) => `#${t.id} [${t.status}] ${t.title} → ${t.assignee}`);
+  if (open.length > 30) lines.push(`…and ${open.length - 30} more (list_tasks)`);
+  return `${lines.join('\n') || '(no open tasks)'}${done ? `\n(${done} finished or cancelled)` : ''}`;
+}
+const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 12);
+const clip = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
+
+/** Builds the prompt for this turn: board summary when it changed, plus a short handoff when the context was just reset. */
+function preparePrompt(text) {
+  let prefix = '';
+  const limit = config.head.maxContextTokens;
+  if (session.id && limit && (session.context || 0) > limit) {
+    const recent = getFeed(CHAT, 12).filter((m) => m.role === 'user' || m.role === 'head').slice(-6).map((m) => `${m.role === 'user' ? 'Owner' : 'You'}: ${clip(m.text, 500)}`);
+    const n = session.context;
+    session = { ...session, id: null, lastBoard: null, context: 0 }; save('head-session.json', session);
+    pushFeed(CHAT, { role: 'system', text: `Context reset to save tokens (it had grown to ${fmtK(n)}). The board and the last messages were carried over.` }, 'head_message');
+    prefix += `[context was reset to save tokens; the conversation so far, newest last]\n${recent.join('\n') || '(nothing yet)'}\n\n`;
+  }
+  const board = boardDigest(), bh = hash(board);
+  if (bh !== session.lastBoard) { prefix += `[board]\n${board}\n\n`; session.lastBoard = bh; save('head-session.json', session); }
+  return prefix + text;
 }
 
 async function runTurn(text) {
@@ -102,7 +135,9 @@ async function runTurn(text) {
     tools: ['Read', 'Glob', 'Grep'], mcpServers: { crew: server },
     allowedTools: ['Read', 'Glob', 'Grep', ...names.map((n) => `mcp__crew__${n}`)],
     includePartialMessages: true, abortController: abort, maxTurns: 40, settingSources: ['project'],
+    ...(config.head.effort ? { effort: config.head.effort } : {}),
   };
+  text = preparePrompt(text);
   try {
     try { await consume(text, { ...base, ...(session.id ? { resume: session.id } : {}) }); }
     catch (e) {
@@ -121,10 +156,18 @@ async function runTurn(text) {
 }
 
 async function consume(prompt, options) {
+  let cur = null; // the model request being streamed right now
   for await (const m of query({ prompt, options })) {
     if (m.session_id && m.session_id !== session.id) { session.id = m.session_id; save('head-session.json', session); }
     if (m.type === 'stream_event' && !m.parent_tool_use_id) {
       const ev = m.event;
+      if (ev.type === 'message_start') { const u = ev.message?.usage || {}; cur = { t0: Date.now(), model: ev.message?.model || config.head.model, cached: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0, input: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0), output: 0 }; }
+      else if (ev.type === 'message_delta' && cur && ev.usage?.output_tokens != null) cur.output = ev.usage.output_tokens;
+      else if (ev.type === 'message_stop' && cur) {
+        const ms = Date.now() - cur.t0;
+        recordUsage({ who: 'Head', kind: 'head', ...cur, ms, tps: ms > 500 && cur.output ? +(cur.output / (ms / 1000)).toFixed(1) : 0 });
+        session.context = cur.input; save('head-session.json', session); emit('head_state', headState()); cur = null;
+      }
       if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') emit('head_delta', { text: ev.delta.text });
     } else if (m.type === 'assistant' && !m.parent_tool_use_id) {
       for (const b of m.message.content || []) {
@@ -132,7 +175,7 @@ async function consume(prompt, options) {
         else if (b.type === 'tool_use') pushFeed(CHAT, { role: 'tool', text: `${b.name.replace(/^mcp__crew__/, '')} ${compact(b.input)}` }, 'head_message');
       }
     } else if (m.type === 'result') {
-      if (typeof m.total_cost_usd === 'number') { session.costUsd = (session.costUsd || 0) + m.total_cost_usd; save('head-session.json', session); }
+      if (typeof m.total_cost_usd === 'number') { session.costUsd = (session.costUsd || 0) + m.total_cost_usd; save('head-session.json', session); addCost('Head', m.total_cost_usd); }
       if (m.subtype && m.subtype !== 'success') pushFeed(CHAT, { role: 'error', text: `Head stopped: ${m.subtype}` }, 'head_message');
     }
   }
@@ -150,7 +193,9 @@ T.hooks.attention = (t, reason) => {
     const lines = [...notes].filter(([id, r]) => getTask(id)?.status === r).map(([id, r]) => `- #${id} "${getTask(id).title}" (${getTask(id).assignee}): ${({ review: 'ready for review', blocked: 'blocked, has a question', needs_attention: 'failed after retries' })[r]}`);
     notes.clear();
     if (lines.length) sendToHead(`[system] The board needs you:\n${lines.join('\n')}`, 'system');
-  }, 3000);
+  }, Math.max(0, config.head.wakeDelaySeconds) * 1000);
 };
 
 export { workerByName };
+
+export const __test = { preparePrompt, buildSystem, getSession: () => session, setSession: (s) => { session = s; } };

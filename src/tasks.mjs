@@ -29,7 +29,8 @@ export function streamTracker(workerName) {
   const poke = () => { if (!timer) timer = setTimeout(push, 200); };
   const tail = (str, n) => (str.length > n ? str.slice(-n) : str);
   return {
-    start() { s.requests++; s.state = 'waiting'; s.text = ''; s.tool = null; chunks = 0; t0 = Date.now(); poke(); },
+    taskId: entry.id, attempt: entry.attempt,
+    start() { s.requests++; s.state = 'waiting'; s.text = ''; s.tool = null; s.out = 0; chunks = 0; t0 = Date.now(); poke(); },
     delta({ reasoning, content, tool }) {
       if (reasoning) { s.state = 'thinking'; s.text = tail(s.text + reasoning, 1800); chunks++; }
       if (content) { s.state = 'writing'; s.text = tail(s.text + content, 1800); chunks++; }
@@ -38,10 +39,17 @@ export function streamTracker(workerName) {
         if (tool.name) s.tool = { name: tool.name, args: '' };
         if (s.tool && tool.args) s.tool.args = tail(s.tool.args + tool.args, 600);
       }
-      const secs = (Date.now() - t0) / 1000; s.tps = secs > 1 ? Math.round(chunks / secs) : s.tps;
+      s.out = chunks; const secs = (Date.now() - t0) / 1000; s.tps = secs > 1 ? Math.round(chunks / secs) : s.tps;
       poke();
     },
-    end() { s.state = 'idle'; poke(); },
+    /** u = {input, output, cached} from the server, when it reported them */
+    end(u) {
+      s.state = 'idle'; if (u) s.last = u;
+      const tk = (entry.tokens ||= { requests: 0, input: 0, output: 0 });
+      if (u) { tk.requests++; tk.input += u.input; tk.output += u.output; }
+      s.tokens = tk; poke();
+    },
+    chunks: () => chunks, ms: () => Date.now() - t0,
   };
 }
 const starting = new Set();

@@ -8,6 +8,7 @@ import * as G from './git.mjs';
 import * as T from './tasks.mjs';
 import { sendToHead, stopHead, resetHead, headState } from './head.mjs';
 import { dm, dmFeed } from './dm.mjs';
+import { record as recordUsage, usageSnapshot, resetUsage } from './usage.mjs';
 import { authStatus, startLogin, submitCode, cancelLogin, logout, loginState } from './auth.mjs';
 import { getLessons, setLessons, scopes, validScope } from './lessons.mjs';
 
@@ -22,6 +23,7 @@ app.use('/llm-proxy/:agent', express.json({ limit: '100mb' }), async (req, res) 
   if (!w || req.headers.authorization !== `Bearer ${T.PROXY_TOKEN}`) return res.status(401).json({ error: 'unauthorized' });
   const s = workerSettings(w);
   const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : { ...(req.body || {}), ...(s.provider ? { provider: { ...(req.body?.provider || {}), ...s.provider } } : {}) };
+  if (body?.stream) body.stream_options = { include_usage: true, ...(body.stream_options || {}) }; // ask for token counts in the last chunk
   const track = req.method === 'POST' && /\/chat\/completions$/.test(req.path) ? T.streamTracker(w.name) : null;
   const ac = new AbortController(); res.on('close', () => ac.abort());
   try {
@@ -32,10 +34,23 @@ app.use('/llm-proxy/:agent', express.json({ limit: '100mb' }), async (req, res) 
     });
     res.status(up.status); res.setHeader('content-type', up.headers.get('content-type') || 'application/json');
     if (!up.body) { track?.end(); return res.end(); }
-    let carry = '', raw = '';
+    let carry = '', raw = '', rep = null; // rep: token counts as reported by the server
+    const takeUsage = (j) => {
+      const u = j.usage, tm = j.timings;
+      if (u) rep = { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: u.prompt_tokens_details?.cached_tokens || 0 };
+      if (tm) rep = { input: (tm.prompt_n || 0) + (tm.cache_n || 0), output: tm.predicted_n || rep?.output || 0, cached: tm.cache_n || 0 }; // llama.cpp: cache_n = prompt tokens reused from its cache
+    };
+    const finish = (ok) => {
+      if (!track || !ok) return track?.end();
+      const out = rep || { input: Math.ceil(JSON.stringify(body?.messages || '').length / 4), output: track.chunks(), cached: 0, estimated: true };
+      const ms = track.ms();
+      recordUsage({ who: w.name, kind: 'task', taskId: track.taskId, attempt: track.attempt, model: body?.model || s.model, ...out, ms, tps: ms > 500 && out.output ? +(out.output / (ms / 1000)).toFixed(1) : 0 });
+      track.end(out);
+    };
     const feed = (line) => { // one SSE line: data: {chat.completion.chunk}
       if (!line.startsWith('data:') || line.includes('[DONE]')) return;
       let j; try { j = JSON.parse(line.slice(5)); } catch { return; }
+      takeUsage(j);
       const d = j.choices?.[0]?.delta; if (!d) return;
       const tc = d.tool_calls?.[0]?.function;
       track.delta({ reasoning: d.reasoning_content || d.reasoning, content: d.content, tool: tc ? { name: tc.name, args: tc.arguments } : null });
@@ -48,11 +63,11 @@ app.use('/llm-proxy/:agent', express.json({ limit: '100mb' }), async (req, res) 
     });
     stream.on('end', () => {
       if (track && !/event-stream/.test(up.headers.get('content-type') || '')) { // non-streaming answer
-        try { const m = JSON.parse(raw).choices?.[0]?.message; track.delta({ reasoning: m?.reasoning_content, content: m?.content, tool: m?.tool_calls?.[0]?.function ? { name: m.tool_calls[0].function.name, args: m.tool_calls[0].function.arguments } : null }); } catch {}
+        try { const jj = JSON.parse(raw); takeUsage(jj); const m = jj.choices?.[0]?.message; track.delta({ reasoning: m?.reasoning_content, content: m?.content, tool: m?.tool_calls?.[0]?.function ? { name: m.tool_calls[0].function.name, args: m.tool_calls[0].function.arguments } : null }); } catch {}
       }
-      track?.end();
+      finish(true);
     });
-    stream.on('error', () => { track?.end(); res.end(); });
+    stream.on('error', () => { finish(false); res.end(); });
     stream.pipe(res);
   } catch (e) { track?.end(); if (!res.headersSent) res.status(502).json({ error: `proxy: ${e.message}` }); else res.end(); }
 });
@@ -64,6 +79,8 @@ const maskKeys = (ws) => ws.map((w) => ({ ...w, apiKey: '', hasKey: !!w.apiKey }
 const publicConfig = () => ({ project: config.project, head: config.head, workers: maskKeys(config.workers), scheduler: config.scheduler, qwen: { model: config.qwen.model, endpoint: config.qwen.endpoint } });
 const fullConfig = () => ({ project: config.project, head: config.head, workers: maskKeys(config.workers), qwen: config.qwen, scheduler: config.scheduler, lessons: config.lessons });
 
+app.get('/api/usage', h(async () => usageSnapshot()));
+app.post('/api/usage/reset', h(async () => { resetUsage(); return { ok: true }; }));
 app.get('/api/state', h(async () => ({
   config: publicConfig(), repoError, head: headState(), tasks: allTasks(),
   live: T.liveSnapshot(), feed: getFeed('feed'), headChat: getFeed('head-chat'), lessonScopes: scopes(),

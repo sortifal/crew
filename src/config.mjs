@@ -8,7 +8,7 @@ export const CONFIG_PATH = path.resolve(process.env.CREW_CONFIG || path.join(ROO
 
 const DEFAULTS = {
   project: { name: 'Project', repo: '', baseBranch: 'main', context: '' },
-  head: { model: 'opus', autoReview: true, instructions: '' },
+  head: { model: 'opus', effort: 'medium', autoReview: true, maxContextTokens: 60000, wakeDelaySeconds: 8, instructions: '' },
   workers: [{ name: 'Dev', role: 'Developer', persona: '' }],
   qwen: {
     command: 'qwen',
@@ -66,6 +66,11 @@ export function normalize(raw) {
   c.project.context = String(c.project.context || '');
   c.head.model = String(c.head.model || 'opus').trim();
   c.head.autoReview = c.head.autoReview !== false;
+  c.head.effort = String(c.head.effort || '').trim().toLowerCase();
+  if (!['', 'low', 'medium', 'high', 'xhigh', 'max'].includes(c.head.effort)) throw new Error('config: head.effort must be low, medium, high, xhigh, max or empty');
+  c.head.maxContextTokens = posNum(c.head.maxContextTokens, 'Head context limit', { int: true, min: 0 });
+  if (c.head.maxContextTokens && c.head.maxContextTokens < 10000) throw new Error('config: Head context limit must be 0 (never reset) or at least 10000 tokens');
+  c.head.wakeDelaySeconds = posNum(c.head.wakeDelaySeconds, 'Head wake-up delay', { min: 0 });
   c.head.instructions = String(c.head.instructions || '');
   if (!Array.isArray(c.qwen.args)) throw new Error('config: qwen.args must be a list');
   c.qwen.args = c.qwen.args.map(String);
@@ -133,7 +138,7 @@ export function saveConfigObject(obj) {
   const doc = YAML.parseDocument(cur);
   const clean = {
     project: pick(obj.project || {}, ['name', 'repo', 'baseBranch', 'context']),
-    head: pick(obj.head || {}, ['model', 'autoReview', 'instructions']),
+    head: pick(obj.head || {}, ['model', 'effort', 'autoReview', 'maxContextTokens', 'wakeDelaySeconds', 'instructions']),
     workers: (obj.workers || []).map((w) => {
       const o = pick(w, ['name', 'role', 'persona']);
       if (w.enabled === false) o.enabled = false;

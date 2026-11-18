@@ -43,7 +43,7 @@ function md(s) {
 const STATUS = { queued: 'Queued', running: 'Running', review: 'Review', blocked: 'Blocked', needs_attention: 'Needs attention', done: 'Done', cancelled: 'Cancelled' };
 const badge = (st) => `<span class="badge ${st}">${STATUS[st] || st}</span>`;
 
-const S = { auth: null, authPhase: { phase: 'idle' }, config: null, tasks: new Map(), feeds: { team: [], head: [], dm: {} }, tab: 'head', unread: {}, selected: null, detail: null, live: '', headBusy: false, busySince: 0, act: new Map() };
+const S = { auth: null, authPhase: { phase: 'idle' }, config: null, tasks: new Map(), feeds: { team: [], head: [], dm: {} }, tab: 'head', unread: {}, selected: null, detail: null, live: '', headBusy: false, busySince: 0, act: new Map(), usage: { recent: [], totals: {} }, ctx: { context: 0, maxContext: 0 } };
 
 /* ───────── rendering ───────── */
 function renderHeader() {
@@ -74,7 +74,7 @@ function workerStatus(name) {
 
 function renderRoster() {
   const el = $('#roster'); el.innerHTML = '';
-  const people = [{ name: 'Head', tab: 'head', st: { cls: S.headBusy ? 'live' : '', text: S.headBusy ? 'Working…' : 'Opus · project lead' } }, ...S.config.workers.map((w) => ({ name: w.name, tab: 'dm:' + w.name, st: w.enabled === false ? { cls: '', text: 'Disabled' } : workerStatus(w.name), role: w.role, off: w.enabled === false }))];
+  const people = [{ name: 'Head', tab: 'head', st: { cls: S.headBusy ? 'live' : '', text: S.headBusy ? 'Working…' : S.ctx.context ? `Opus · context ${fmtN(S.ctx.context)}${S.ctx.maxContext ? ' / ' + fmtN(S.ctx.maxContext) : ''}` : 'Opus · project lead' } }, ...S.config.workers.map((w) => ({ name: w.name, tab: 'dm:' + w.name, st: w.enabled === false ? { cls: '', text: 'Disabled' } : workerStatus(w.name), role: w.role, off: w.enabled === false }))];
   for (const p of people) {
     const d = document.createElement('div'); d.className = 'person' + (S.tab === p.tab ? ' sel' : '') + (p.off ? ' off' : '');
     d.innerHTML = `${avatar(p.name)}<div style="min-width:0;flex:1"><div class="nm">${esc(p.name)}</div><div class="sub">${esc(p.st.text)}</div>${p.st.since ? `<div class="sub el" data-since="${p.st.since}"></div>` : ''}</div><span class="dot ${p.st.cls}"></span>`;
@@ -99,7 +99,7 @@ function renderBoard() {
 
 function renderTabs() {
   const el = $('#tabs'); el.innerHTML = '';
-  const tabs = [['head', 'Head'], ['team', 'Team'], ['live', 'Live'], ...S.config.workers.map((w) => ['dm:' + w.name, w.name])];
+  const tabs = [['head', 'Head'], ['team', 'Team'], ['live', 'Live'], ['usage', 'Usage'], ...S.config.workers.map((w) => ['dm:' + w.name, w.name])];
   for (const [id, label] of tabs) {
     const b = document.createElement('button'); b.className = S.tab === id ? 'on' : '';
     b.innerHTML = (id === 'live' && S.act.size ? '<span class="dot live" style="margin-right:6px"></span>' : '') + esc(label) + (S.unread[id] ? `<span class="count">${S.unread[id]}</span>` : '');
@@ -145,11 +145,30 @@ function renderDm(n) {
 }
 
 const fmtDur = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`; };
+const fmtN = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n || 0));
+function renderUsage() {
+  const U = S.usage, c = S.ctx;
+  const pct = c.maxContext ? Math.min(100, Math.round(c.context / c.maxContext * 100)) : 0;
+  const gauge = `<div class="card"><div class="inner"><h4>Head context</h4>
+    <div class="gauge"><div style="width:${pct}%" class="${pct > 85 ? 'hot' : ''}"></div></div>
+    <div class="muted" style="font-size:12px;margin-top:6px">${fmtN(c.context)} tokens in the current session${c.maxContext ? ` of ${fmtN(c.maxContext)} before it is reset automatically (Settings → Project → Head)` : ' (automatic reset is off)'}. Every turn re-reads this, mostly from the cache.</div></div></div>`;
+  const rows = Object.entries(U.totals).sort((a, b) => b[1].input - a[1].input).map(([who, t]) => `<tr><td>${esc(who)}</td><td>${t.requests}</td><td>${fmtN(t.input)}</td><td>${fmtN(t.output)}</td><td>${t.input ? Math.round(t.cached / t.input * 100) + '%' : '–'}</td><td>${t.cost ? '$' + t.cost.toFixed(2) : ''}</td></tr>`).join('');
+  const reqs = [...U.recent].reverse().slice(0, 60).map((r) => `<tr><td>${new Date(r.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td><td>${esc(r.who)}</td><td>${r.taskId ? '#' + r.taskId : r.kind === 'chat' ? 'chat' : ''}</td><td>${fmtN(r.input)}${r.estimated ? '~' : ''}</td><td>${r.cached ? fmtN(r.cached) : ''}</td><td>${fmtN(r.output)}${r.estimated ? '~' : ''}</td><td>${r.tps || ''}</td><td>${r.ms ? (r.ms / 1000).toFixed(1) + 's' : ''}</td></tr>`).join('');
+  return `${gauge}
+  <div class="card"><div class="inner"><div class="row between"><h4>Totals</h4><button class="btn ghost sm" id="usageReset">Reset</button></div>
+    <table class="utable"><thead><tr><th>Who</th><th>Requests</th><th>Prompt</th><th>Output</th><th>Cached</th><th>Cost</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="muted">Nothing yet</td></tr>'}</tbody></table>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">Prompt = all input tokens of the requests, including the part served from a cache. “Cached” is the share of the prompt that was not recomputed. Cost is only known for the Head.</div></div></div>
+  <div class="card"><div class="inner"><h4>Recent requests</h4>
+    <table class="utable"><thead><tr><th>Time</th><th>Who</th><th>Task</th><th>Prompt</th><th>Cached</th><th>Output</th><th>tok/s</th><th>Time</th></tr></thead><tbody>${reqs || '<tr><td colspan="8" class="muted">Nothing yet</td></tr>'}</tbody></table>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">A “~” means the server did not report token counts, so the value is an estimate.</div></div></div>`;
+}
 function streamBox(st) {
   if (!st) return '';
   const label = { waiting: 'waiting for the model…', thinking: 'thinking', writing: 'writing', tool: st.tool ? `calling ${st.tool.name}` : 'calling a tool', idle: 'running a tool / between requests' }[st.state] || st.state;
+  const tk = st.tokens, ln = st.last;
+  const tokLine = (ln ? `last: ${fmtN(ln.input)} in${ln.cached ? ' (' + fmtN(ln.cached) + ' cached)' : ''} → ${fmtN(ln.output)} out` : '') + (tk ? `${ln ? ' · ' : ''}this run: ${tk.requests} req, ${fmtN(tk.input)} in, ${fmtN(tk.output)} out` : '');
   const body = st.state === 'tool' && st.tool ? `${st.tool.name}(${st.tool.args || ''})` : st.state === 'idle' ? '' : st.text;
-  return `<div class="strm ${st.state}"><div class="sh"><span class="sp-dot"></span><b>${esc(label)}</b><span class="mono muted">request ${st.requests}${st.tps && st.state !== 'idle' ? ' · ~' + st.tps + ' tok/s' : ''}</span></div>${body ? `<pre class="sp">${esc(body)}</pre>` : ''}</div>`;
+  return `<div class="strm ${st.state}"><div class="sh"><span class="sp-dot"></span><b>${esc(label)}</b><span class="mono muted">request ${st.requests}${st.state !== 'idle' && st.out ? ' · ' + st.out + ' out' : ''}${st.tps && st.state !== 'idle' ? ' · ~' + st.tps + ' tok/s' : ''}</span></div>${tokLine ? `<div class="mono muted" style="font-size:11px;margin-top:4px">${tokLine}</div>` : ''}${body ? `<pre class="sp">${esc(body)}</pre>` : ''}</div>`;
 }
 function renderLive() {
   const list = [...S.act.values()];
@@ -172,15 +191,16 @@ function tickClocks() {
 }
 setInterval(tickClocks, 1000);
 let liveTimer = null;
-const refreshLive = () => { if (liveTimer) return; liveTimer = setTimeout(() => { liveTimer = null; renderRoster(); renderTabs(); if (S.tab === 'live') { renderChat(); document.querySelectorAll('.sp').forEach((x) => (x.scrollTop = 1e9)); } tickClocks(); }, 250); };
+const refreshLive = () => { if (liveTimer) return; liveTimer = setTimeout(() => { liveTimer = null; renderRoster(); renderTabs(); if (S.tab === 'live' || S.tab === 'usage') { renderChat(); document.querySelectorAll('.sp').forEach((x) => (x.scrollTop = 1e9)); } tickClocks(); }, 250); };
 
 function renderChat() {
   const el = $('#chat'); const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-  const body = S.tab === 'head' ? renderHeadChat() : S.tab === 'team' ? renderTeam() : S.tab === 'live' ? renderLive() : renderDm(S.tab.slice(3));
+  const body = S.tab === 'head' ? renderHeadChat() : S.tab === 'team' ? renderTeam() : S.tab === 'live' ? renderLive() : S.tab === 'usage' ? renderUsage() : renderDm(S.tab.slice(3));
   el.innerHTML = `<div class="col">${body}</div>`;
+  const ur = $('#usageReset'); if (ur) ur.onclick = async () => { if (confirm('Reset all token totals and the request list?')) await api('POST', '/api/usage/reset'); };
   if (S.tab === 'live') el.querySelectorAll('.lp').forEach((p) => (p.scrollTop = p.scrollHeight));
   else if (atBottom) el.scrollTop = el.scrollHeight;
-  $('#composer').hidden = S.tab === 'live';
+  $('#composer').hidden = S.tab === 'live' || S.tab === 'usage';
   tickClocks();
   $('#input').placeholder = S.tab === 'head' ? 'Tell the Head what you want built…' : S.tab === 'team' ? 'Post to the team (@Name to ping)…' : `Message ${S.tab.slice(3)}…`;
 }
@@ -231,6 +251,7 @@ function renderDetail() {
     <input class="field" id="rejLesson" placeholder="Lesson to remember (optional)">
     <div class="actions"><button class="btn secondary" id="doReject">Send back</button></div></div></div>`;
   if (t.problem) h += `<div class="sec"><h4>Problem</h4>${codeBox('why it failed', t.problem, 'red')}</div>`;
+  if (t.usage) h += `<div class="muted mono" style="font-size:12px;margin:6px 0">Tokens: ${t.usage.requests} requests · ${fmtN(t.usage.input)} prompt · ${fmtN(t.usage.output)} output</div>`;
   h += `<div class="sec"><h4>Brief</h4>${codeBox('brief.md', t.brief)}</div>`;
   if (t.acceptance.length) h += `<div class="sec"><h4>Acceptance</h4>${codeBox('criteria', t.acceptance.map((a) => '• ' + a).join('\n'))}</div>`;
   if (t.verify) h += `<div class="sec"><h4>Check command</h4>${codeBox('shell', t.verify)}</div>`;
@@ -278,6 +299,8 @@ function panelGeneral() {
   </div>
   <div class="grp"><h4>Head (Opus)</h4>
     ${fld('Model', inp('head.model', { list: 'headModels', ph: 'opus' }), 'An alias (<code>opus</code>, <code>sonnet</code>, <code>haiku</code>) or a full model id.<datalist id="headModels"><option>opus</option><option>sonnet</option><option>haiku</option></datalist>')}
+    <div class="grid2">${fld('Thinking effort', `<select class="field" data-b="head.effort">${['', 'low', 'medium', 'high', 'xhigh', 'max'].map((v) => `<option value="${v}">${v || 'model default'}</option>`).join('')}</select>`, 'Lower effort uses fewer tokens. “medium” is plenty for planning and reviewing.')}${fld('Reset context above (tokens)', inp('head.maxContextTokens', { type: 'number', as: 'num' }), 'When the Head\'s conversation grows past this, it restarts with the board and the last messages. 0 = never. Smaller = cheaper turns.')}</div>
+    ${fld('Wait before waking the Head (seconds)', inp('head.wakeDelaySeconds', { type: 'number', as: 'num' }), 'Finished tasks arriving within this window are handled in one turn instead of several.')}
     ${sw('head.autoReview', 'Wake the Head automatically when a task is ready for review, blocked or failed')}
     ${fld('Extra instructions', area('head.instructions', 5, 'e.g. “Be strict about tests. Prefer many small tasks. Answer me in French.”'), 'Added to the Head\'s system prompt.')}
   </div>`;
@@ -507,13 +530,14 @@ function onEvent(e) {
   switch (e.type) {
     case 'task': S.tasks.set(e.task.id, e.task); renderRoster(); renderBoard(); if (S.selected === e.task.id) { clearTimeout(detailTimer); detailTimer = setTimeout(loadDetail, 400); } break;
     case 'live': if (e.entry) S.act.set(e.id, e.entry); else S.act.delete(e.id); refreshLive(); break;
+    case 'usage': if (e.reset) S.usage = { recent: [], totals: {} }; else { if (e.rec) { S.usage.recent.push(e.rec); if (S.usage.recent.length > 120) S.usage.recent.shift(); } S.usage.totals[e.who] = e.totals; } if (S.tab === 'usage') refreshLive(); break;
     case 'live_stream': { const a = S.act.get(e.id); if (a) { a.stream = e.stream; a.lastOutputAt = Date.now(); refreshLive(); } break; }
     case 'task_files': { const a = S.act.get(e.id); if (a) { a.files = e.files; refreshLive(); } break; }
     case 'task_log': if (S.selected === e.id && S.detail && e.attempt === S.detail.attempts.length) { const L = $('#log'); if (L) { L.textContent += e.chunk; L.scrollTop = 1e9; } } liveAppend(e); break;
     case 'feed': if (e.feed === 'feed') { S.feeds.team.push(e.entry); bump('team'); renderTabs(); if (S.tab === 'team') renderChat(); } break;
     case 'head_message': S.feeds.head.push(e.entry); S.live = ''; if (e.entry.role === 'head' || e.entry.role === 'error') bump('head'); renderTabs(); if (S.tab === 'head') renderChat(); break;
     case 'head_delta': S.live += e.text; if (S.tab === 'head') renderChat(); break;
-    case 'head_state': if (e.busy && !S.headBusy) S.busySince = Date.now(); S.headBusy = e.busy; S.cost = e.costUsd; if (!e.busy) S.live = ''; renderHeader(); renderRoster(); if (S.tab === 'head') renderChat(); hydrateIcons(); break;
+    case 'head_state': if (e.busy && !S.headBusy) S.busySince = Date.now(); S.headBusy = e.busy; S.cost = e.costUsd; S.ctx = { context: e.context, maxContext: e.maxContext }; if (S.tab === 'usage') renderChat(); if (!e.busy) S.live = ''; renderHeader(); renderRoster(); if (S.tab === 'head') renderChat(); hydrateIcons(); break;
     case 'head_cleared': S.feeds.head = []; renderChat(); break;
     case 'dm': { const n = e.feed.slice(3); const name = S.config.workers.find((w) => w.name.toLowerCase() === n)?.name || n; (S.feeds.dm[name] ||= []).push(e.entry); if (e.entry.role !== 'user') bump('dm:' + name); renderTabs(); if (S.tab === 'dm:' + name) renderChat(); break; }
     case 'auth': S.authPhase = e; if (e.phase === 'done') { S.auth = e.status ? { ...e.status } : S.auth; setTimeout(() => { if (S.authOpen && S.authPhase.phase === 'done') modal.close(); }, 1200); refreshAuth(); } if (S.authOpen) renderAuthModal(); break;
@@ -524,7 +548,7 @@ function onEvent(e) {
 async function init() {
   hydrateIcons(); applyTheme(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
   const st = await api('GET', '/api/state');
-  S.config = st.config; S.repoError = st.repoError; S.headBusy = st.head.busy; S.cost = st.head.costUsd;
+  S.config = st.config; S.repoError = st.repoError; S.headBusy = st.head.busy; S.cost = st.head.costUsd; S.ctx = { context: st.head.context, maxContext: st.head.maxContext }; try { S.usage = await api('GET', '/api/usage'); } catch {}
   if (S.headBusy) S.busySince = Date.now();
   st.tasks.forEach((t) => S.tasks.set(t.id, t));
   (st.live || []).forEach((a) => S.act.set(a.id, a));

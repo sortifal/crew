@@ -87,6 +87,15 @@ A form-based **Settings** dialog (sidebar) replaces hand-editing YAML (still ava
 - **Workflow** – parallel runs, auto-retries, max attempts, lesson size.
 
 ## UI
+**Usage tab:** token counts for every model request: prompt tokens (and how many of them came from a cache), output tokens, tokens/s and duration, per agent and per task, plus the Head's cost and how full its context is. Agent numbers are the ones the server reports (llama.cpp and OpenRouter both do); if a server doesn't, the value is estimated and marked `~`. The Head's numbers come straight from the API, including prompt-cache reads.
+
+**Keeping the Head cheap.** The Head re-reads its whole conversation on every turn, so Crew keeps that small and cacheable:
+- The system prompt never changes between turns, so Anthropic's prompt cache keeps working. The board is sent as a short `[board]` summary at the start of a message, only when it changed.
+- When the conversation grows past **Reset context above** (default 60k tokens, Settings → Project → Head), the Head restarts with the board and its last few messages. The chat shows a note when this happens.
+- Tool results are kept lean: the diff is capped at ~14k characters, and only the latest attempt is shown in full.
+- **Thinking effort** (default `medium`) and a short **wait before waking the Head** (default 8 s), so several finished tasks are reviewed in one turn instead of several.
+- The Head is told to be terse and not to re-fetch what it already has.
+
 **Live tab:** one card per running agent with its task, elapsed time, the files it has touched so far (refreshed every ~4 s from its worktree), and a tail of its terminal output, streamed as it happens. A "quiet 2m" marker turns orange if an agent has produced no output for a while, which is usually a hung model call. The sidebar also shows each running agent's latest output line and timer. Each card also has a **model output** box showing what the model itself is doing: *waiting*, *thinking* (reasoning), *writing*, *calling a tool* (with its arguments) or *running a tool / between requests*, plus the request count and a rough tokens/s. This works because every agent's requests go through a small proxy inside Crew (`/llm-proxy`, usable only by the CLI processes Crew starts), which reads the streamed response on its way to the CLI. It works the same for the local model and OpenRouter. Click a card to open the task.
 
 Light and dark themes (toggle in the sidebar; follows your system by default). The design language follows [Beautiful UI](https://www.beautifului.dev/) (MIT): OKLCH neutral tokens, hairline rings, pill buttons, 14/10/8 px radii, Inter + JetBrains Mono. Fonts are not bundled and nothing is fetched from the internet; install Inter / JetBrains Mono locally to get the exact look, otherwise system fonts are used.
